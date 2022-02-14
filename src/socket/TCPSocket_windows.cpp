@@ -1,5 +1,7 @@
 #include "TCPSocket.h"
 
+#include "XLogging.h"
+
 #define WIN32_LEAN_AND_MEAN
 
 #include <windows.h>
@@ -168,7 +170,7 @@ ISOCKET_RESULT TCPClientSocket::Recv(char* buf, size_t buflen, size_t& bytesWrit
     }
     
     bytesWritten = nbytes;
-    printf("\tReading %d bytes\n", nbytes);
+    XPRINTF("\tReading %d bytes\n", nbytes);
 
     return ISOCKET_RESULT::OK;
 }
@@ -187,7 +189,7 @@ ISOCKET_RESULT TCPClientSocket::Send(char* buf, size_t buflen)
     }
 
     //bytesWritten = nbytes;
-    printf("\tSending %d bytes\n", nbytes);
+    XPRINTF("\tSending %d bytes\n", nbytes);
 
 
     return ISOCKET_RESULT::OK;

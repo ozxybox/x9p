@@ -1,5 +1,6 @@
 #include "X9PClient.h"
 #include "X9PMessages.h"
+#include "XLogging.h"
 
 #define DEFAULT_MSIZE 8192
 
@@ -204,14 +205,14 @@ xerr_t X9PClient::RecvMessage(bool& wouldblock)
 		// We need more
 		while (written < msg->size)
 		{
-			printf("reading more\n");
+			XPRINTF("reading more\n");
 			size_t w;
 			r = m_socket.Recv((char*)m_recvbuffer + written, msg->size - written, w);
 			written += w;
 		}
 	}
 
-	printf("Received %u %s %u\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
+	XPRINTF("Received %u %s %u\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
 	
 	return 0;
 }
@@ -231,7 +232,7 @@ void X9PClient::QueueMessage(message_t* msg, xmsgcallback_t callback)
 
 xerr_t X9PClient::SendMessage(message_t* msg)
 {
-	printf("Sent %u %s %u\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
+	XPRINTF("Sent %u %s %u\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
 
 	ISOCKET_RESULT r;
 	r = m_socket.Send((char*)msg, msg->size);

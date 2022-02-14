@@ -366,7 +366,9 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 		return;
 	}
 
+#if XLOG_VERBOSE
 	putchar('\n');
+#endif
 
 	direntry_t* dehnd = 0;
 	if (!isValidXHND(hnd, dehnd) || !dehnd)
@@ -384,8 +386,10 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 	uint16_t n = nwname;
 	for (xstr_t name = wname; i < n; name = xstrnext(name))
 	{
+#if XLOG_VERBOSE 
 		xstrprint(name);
 		putchar('\n');
+#endif
 
 		if (wn->Type() == X9P_FT_DIRECTORY)
 		{

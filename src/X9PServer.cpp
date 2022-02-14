@@ -1,4 +1,5 @@
 #include "X9PServer.h"
+#include "XLogging.h"
 #include <stdio.h>
 #include <vector>
 #include <unordered_map>
@@ -136,7 +137,7 @@ void X9PServer::ProcessPackets()
 			memcpy(version->str(), X9P_VERSION, X9P_VERSION_LEN);
 
 
-			printf("msize: %u\n", msize);
+			XPRINTF("msize: %u\n", msize);
 			cl.SendMessage(send);
 
 			break;
