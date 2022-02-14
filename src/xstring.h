@@ -13,6 +13,9 @@ typedef struct
 {
 	xstrlen_t len;
 	char* str() { return reinterpret_cast<char*>(this) + sizeof(xstrlen_t); }
+
+	// This is the size of this structure in bytes INCLUDING "len" and "str"
+	size_t size() { return sizeof(xstrlen_t) + len; }
 }* xstr_t;
 
 
@@ -26,8 +29,11 @@ xstr_t xstrdup( const char* str);
 xstr_t xstrdup(const xstr_t str);
 
 // String Copying
-xstr_t xstrcpy(xstr_t dest, xstr_t src);
-char* xstrncpy(char* dest, xstr_t src, xstrlen_t size);
+xstr_t xstrcpy( xstr_t dest, const xstr_t src);
+xstr_t xstrncpy(xstr_t dest, const xstr_t src, xstrlen_t size);
+xstr_t xstrcpy(xstr_t dest,	 const char*  src);
+char*  xstrncpy(char* dest,  const xstr_t src, xstrlen_t size);
+xstr_t xstrncpy(xstr_t dest, const char* src,  xstrlen_t size);
 
 // String Comparison
 int xstrcmp( const xstr_t l, const xstr_t r);
@@ -39,12 +45,17 @@ int xstrcmp( const  char* l, const xstr_t r);
 // Supporting string utils // 
 /////////////////////////////
 
+xstr_t xstrsplit(const char* str, char delimiter, int* segments);
+
+// Converts a xstr to a cstr
+char* xstrcstr(const xstr_t str);
+
 // Next string stored right after this one in memory
 // Needed for pulling off a 9P message, but should NOT be used anywhere else!
 xstr_t xstrnext(const xstr_t str);
 
-// Ensure that our 9P messages aren't trying to lie to us
-void xstrsanitize(const xstr_t str);
+// Lets us know if our 9P messages are trying to lie to us by checking if str goes past end
+bool xstrsafe(const xstr_t str, const void* end);
 
 // FNV-1a Hash
 // The const char* versions exist for compatibility with C strings

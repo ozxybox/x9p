@@ -1,7 +1,6 @@
 #pragma once
 
 #include "X9P.h"
-#include "X9PFid.h"
 #include "xstring.h"
 
 // We need these structs packed with no padding
@@ -17,6 +16,7 @@
 
 // No tag attached to this message
 #define NOTAG (0xFFFF)
+#define NOFID (0xFFFFFFFF)
 
 
 // Message types
@@ -124,11 +124,14 @@ struct stat_t
 };
 
 
+//////////////////////////
+// Base of all messages //
+//////////////////////////
 struct message_t
 {
 	uint32_t size; // message length
 	uint8_t  type; // message type
-	uint16_t tag;  // unique message tag
+	mtag_t   tag;  // unique message tag
 };
 
 /////////////////////////
@@ -326,3 +329,5 @@ struct Rerror_t : public message_t
 #error UNSUPPORTED_PLATFORM
 #endif
 // END OF PACKED STRUCTS
+
+

@@ -13,8 +13,10 @@ public:
 	
 	ISOCKET_RESULT Connect(const char* hostname, const char* servicename);
 
-	ISOCKET_RESULT Recv(char* buf, int buflen, int& bytesWritten);
+	ISOCKET_RESULT Recv(char* buf, size_t buflen, size_t& bytesWritten);
 	ISOCKET_RESULT Send(char* buf, size_t buflen);
+
+	ISOCKET_RESULT SetNonblocking(bool nonblocking);
 
 private:
 	
@@ -35,8 +37,9 @@ public:
 
 	ISOCKET_RESULT Listen(const char* hostname, const char* servicename);
 
-
 	ISOCKET_RESULT Accept(TCPClientSocket& out);
+
+	ISOCKET_RESULT SetNonblocking(bool nonblocking);
 private:
 
 	uintptr_t m_socket;

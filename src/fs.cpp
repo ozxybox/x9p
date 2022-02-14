@@ -4,7 +4,7 @@ qid_t filenodeqid(filenode_t* node)
 {
 	qid_t qid;
 	qid.path = node->nid;
-	qid.version = node->ops->fileversion(node);
+	qid.version = 0;// FIXME: node->fs->fileversion(node);
 	qid.type = 0;
 	if (node->type == X9P_FT_DIRECTORY)
 		qid.type |= X9P_QT_DIR;

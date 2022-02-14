@@ -108,17 +108,22 @@ ISOCKET_RESULT CreateSocket(SOCKET& out, const char* hostname, const char* servi
     }
 
 
-    // Set the client to nonblocking
-    u_long nonblock = 1;
-    err = ioctlsocket(sock, FIONBIO, &nonblock);
-    if (err)
-    {
-        closesocket(sock);
-        return ISOCKET_RESULT::NONBLOCKING_FAIL;
-    }
 
     // Should be set up by now!
     out = sock;
+    return ISOCKET_RESULT::OK;
+}
+
+ISOCKET_RESULT SetSocketNonblocking(SOCKET sock, bool nonblocking)
+{
+    // Set the client to nonblocking
+    u_long nonblock = nonblocking ? 1 : 0;
+    int err = ioctlsocket(sock, FIONBIO, &nonblock);
+    if (err)
+    {
+        //closesocket(sock);
+        return ISOCKET_RESULT::NONBLOCKING_FAIL;
+    }
     return ISOCKET_RESULT::OK;
 }
 
@@ -147,9 +152,9 @@ ISOCKET_RESULT TCPClientSocket::Connect(const char* hostname, const char* servic
     
     return CreateSocket(m_socket, hostname, servicename, false);
 }
-
+#include <stdio.h>
 // Non-blocking receive from socket
-ISOCKET_RESULT TCPClientSocket::Recv(char* buf, int buflen, int& bytesWritten)
+ISOCKET_RESULT TCPClientSocket::Recv(char* buf, size_t buflen, size_t& bytesWritten)
 {
     int nbytes = recv(m_socket, buf, buflen, 0);
 	
@@ -163,6 +168,7 @@ ISOCKET_RESULT TCPClientSocket::Recv(char* buf, int buflen, int& bytesWritten)
     }
     
     bytesWritten = nbytes;
+    printf("\tReading %d bytes\n", nbytes);
 
     return ISOCKET_RESULT::OK;
 }
@@ -181,10 +187,16 @@ ISOCKET_RESULT TCPClientSocket::Send(char* buf, size_t buflen)
     }
 
     //bytesWritten = nbytes;
+    printf("\tSending %d bytes\n", nbytes);
+
 
     return ISOCKET_RESULT::OK;
 }
 
+ISOCKET_RESULT TCPClientSocket::SetNonblocking(bool nonblocking)
+{
+    return SetSocketNonblocking(m_socket, nonblocking);
+}
 
 
 ///////////////////////////////
@@ -239,4 +251,9 @@ ISOCKET_RESULT TCPListenSocket::Accept(TCPClientSocket& out)
     out = { client };
 
     return ISOCKET_RESULT::OK;
+}
+
+ISOCKET_RESULT TCPListenSocket::SetNonblocking(bool nonblocking)
+{
+    return SetSocketNonblocking(m_socket, nonblocking);
 }

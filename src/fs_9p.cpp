@@ -1,4 +1,5 @@
 #include "fs.h"
+#include "X9PClient.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -6,44 +7,32 @@
 #include <vector>
 
 
-// Too long to type!
-typedef std::unordered_map<xstr_t, direntry_t, xstrhash_t, xstrequality_t> vflookup_t;
-
-struct virt_filedata_t
-{
-	union
-	{
-	std::vector<char>* buf;
-	vflookup_t* children;
-	};
-	size_t len;
-	uint32_t ver;
-};
 
 static direntry_t s_rootdirentry;
 static filenode_t* s_rootnode;
 
-foperr_t virt_walk(fauth_t* auth, filenode_t* fnode, walkparam_t* param, walkret_t* ret);
-foperr_t virt_open(fauth_t* auth, filenode_t* fnode, openmode_t mode, uint64_t* size);
-foperr_t virt_create(fauth_t* auth, filenode_t* dir, xstr_t name, dirmode_t perm, openmode_t mode, direntry_t** ret);
-foperr_t virt_read(fauth_t* auth, filenode_t* fnode, fileio_t* fio);
-foperr_t virt_write(fauth_t* auth, filenode_t* fnode, fileio_t* fio);
-foperr_t virt_remove(fauth_t* auth, direntry_t* dentry);// filenode_t* dir, filenode_t* fnode);
-foperr_t virt_stat(fauth_t* auth, filenode_t* fnode, filestats_t* stats);
-foperr_t virt_wstat(fauth_t* auth, filenode_t* fnode, filestats_t* stats);
-uint32_t virt_fileversion(filenode_t* fnode);
+class XRemoteFileSystem : public XFileSystem
+{
+public:
+	XRemoteFileSystem(X9PClient* client, fid_t rootfid);
 
-static fileops_t s_vfops = {
-	virt_walk,
-	virt_open,
-	virt_create,
-	virt_read,
-	virt_write,
-	virt_remove,
-	virt_stat,
-	virt_wstat,
-	virt_fileversion
+	virtual xerr_t walk  (fauth_t* auth, filenode_t* fnode, walkparam_t* param, Rwalk_t callback);
+	virtual xerr_t open  (fauth_t* auth, filenode_t* fnode, openmode_t mode, Ropen_t callback);
+	virtual xerr_t create(fauth_t* auth, filenode_t* dir, xstr_t name, dirmode_t perm, openmode_t mode, Rcreate_t callback);
+	virtual xerr_t read  (fauth_t* auth, filenode_t* fnode, fileio_t* fio, Rread_t callback);
+	virtual xerr_t write (fauth_t* auth, filenode_t* fnode, fileio_t* fio, Rwrite_t callback);
+	virtual xerr_t remove(fauth_t* auth, direntry_t* dentry, Rremove_t callback);//filenode_t* dir, filenode_t* file);
+	virtual xerr_t stat  (fauth_t* auth, filenode_t* fnode, Rstat_t callback);
+	virtual xerr_t wstat (fauth_t* auth, filenode_t* fnode, filestats_t* stats, Rwstat_t callback);
+
+	// Non 9P RPC calls
+	virtual uint32_t fileversion(filenode_t* fnode);
+private:
+	X9PClient* m_client;
+	fid_t m_rootfid;
 };
+
+XRemoteFileSystem s_vfs;
 
 direntry_t* virt_rootdirentry() { return &s_rootdirentry; }
 
@@ -64,7 +53,7 @@ filenode_t* createNode(bool directory)
 	node->gid = 0;
 	node->type = directory ? X9P_FT_DIRECTORY : X9P_FT_FILE;
 	node->data = (void*)vfd;
-	node->ops = &s_vfops;
+	node->fs = &s_vfs;
 
 	return node;
 }
@@ -95,50 +84,19 @@ direntry_t* adddentry(filenode_t* parent, filenode_t* child, xstr_t filename)
 	return &vfd->children->at(de.name);
 }
 
-void virt_init()
+XRemoteFileSystem::XRemoteFileSystem(X9PClient* client, fid_t rootfid) : m_client(client), m_rootfid(rootfid)
 {
-	// Root
-	s_rootnode = createNode(true);
-	virt_filedata_t* s_rootfile = (virt_filedata_t*)s_rootnode->data;
-
-	s_rootdirentry.name = xstrdup("/");
-	s_rootdirentry.parent = s_rootnode;
-	s_rootdirentry.node = s_rootnode;
 
 	
-	// Text file
-	filenode_t* txt = createNode(false);
-	virt_filedata_t* txtdat = (virt_filedata_t*)txt->data;
-
-	txtdat->buf = new std::vector<char>();
-	txtdat->len = strlen("Hello world!\n");
-	txtdat->ver = 0;
-	txtdat->buf->resize(1024);
-	memcpy(txtdat->buf->data(), "Hello world!\n", txtdat->len);
-
-	adddentry(s_rootnode, txt, "hello.txt");
-
-	// Directory
-	filenode_t* folder = createNode(true);
-	virt_filedata_t* fvfd = (virt_filedata_t*)txt->data;
-	direntry_t* files = adddentry(s_rootnode, folder, "files");
-	adddentry(folder, txt, "hoopla.txt");
-
-
-
-
-	// Extras
-	adddentry(s_rootnode, s_rootnode, ".");
-	adddentry(s_rootnode, s_rootnode, "..");
-
 }
 
 
-foperr_t virt_walk(fauth_t* auth, filenode_t* fnode, walkparam_t* param, walkret_t* ret)
+// Non 9P RPC calls
+xerr_t XRemoteFileSystem::walk(fauth_t* auth, filenode_t* fnode, walkparam_t* param, walkret_t* ret)
 {
 	// MAXWELEM pg 750
 	if (param->nwname > 16) return "WALKED TOO FAR";
-	
+
 	putchar('\n');
 
 	direntry_t* de = 0;
@@ -178,7 +136,7 @@ foperr_t virt_walk(fauth_t* auth, filenode_t* fnode, walkparam_t* param, walkret
 	// So instead, we just return that we walked 0 directories
 	//if (i == 0)
 	//	return "File does not exist!";
-	
+
 	ret->nwqid = i;
 
 	ret->walked = de;
@@ -187,15 +145,15 @@ foperr_t virt_walk(fauth_t* auth, filenode_t* fnode, walkparam_t* param, walkret
 	return 0;
 }
 
-foperr_t virt_open(fauth_t* auth, filenode_t* fnode, openmode_t mode, uint64_t* size)
+xerr_t XRemoteFileSystem::open(fauth_t* auth, filenode_t* fnode, openmode_t mode)
 {
 	virt_filedata_t* vfd = (virt_filedata_t*)fnode->data;
-	*size = vfd->len;
+
 
 	return 0;
 }
 
-foperr_t virt_create(fauth_t* auth, filenode_t* dir, xstr_t name, dirmode_t perm, openmode_t mode, direntry_t** ret)
+xerr_t XRemoteFileSystem::create(fauth_t* auth, filenode_t* dir, xstr_t name, dirmode_t perm, openmode_t mode, direntry_t** ret)
 {
 	filenode_t* node;
 	if (perm & X9P_DM_DIR)
@@ -206,7 +164,7 @@ foperr_t virt_create(fauth_t* auth, filenode_t* dir, xstr_t name, dirmode_t perm
 
 		// Extras
 		adddentry(node, node, (const char*)".");
-		adddentry(node, dir,  (const char*)"..");
+		adddentry(node, dir, (const char*)"..");
 	}
 	else
 	{
@@ -229,7 +187,7 @@ foperr_t virt_create(fauth_t* auth, filenode_t* dir, xstr_t name, dirmode_t perm
 	return 0;
 }
 
-foperr_t virt_read(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
+xerr_t XRemoteFileSystem::read(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
 {
 	virt_filedata_t* vfd = (virt_filedata_t*)fnode->data;
 	if (fnode->type == X9P_FT_DIRECTORY)
@@ -240,12 +198,12 @@ foperr_t virt_read(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
 		stat_t* stat = (stat_t*)buf;
 		//for (int i = 0; i < vfd->children->count(); i++)
 		//int caa = 0;
-		for(auto& p : *vfd->children)
+		for (auto& p : *vfd->children)
 		{
 			direntry_t* de = &p.second;
 			filenode_t* node = de->node;
 			filestats_t stats;
-			foperr_t err = node->ops->stat(auth, node, &stats);
+			xerr_t err = node->fs->stat(auth, node, &stats);
 			if (err)
 				return err;
 
@@ -322,7 +280,7 @@ foperr_t virt_read(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
 		}
 
 		size_t sz = fio->offset + fio->count;
-		
+
 		// Cap the size off
 		if (sz > vfd->len) sz = vfd->len;
 		sz -= fio->offset;
@@ -334,7 +292,7 @@ foperr_t virt_read(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
 	return 0;
 }
 
-foperr_t virt_write(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
+xerr_t XRemoteFileSystem::write(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
 {
 	virt_filedata_t* vfd = (virt_filedata_t*)fnode->data;
 	if (fnode->type == X9P_FT_DIRECTORY)
@@ -363,21 +321,24 @@ foperr_t virt_write(fauth_t* auth, filenode_t* fnode, fileio_t* fio)
 	return 0;
 }
 
-foperr_t virt_remove(fauth_t* auth, direntry_t* dentry)//filenode_t* dir, filenode_t* fnode)
+xerr_t XRemoteFileSystem::remove(fauth_t* auth, direntry_t* dentry)
 {
-	virt_filedata_t* vfd = (virt_filedata_t*)dentry->parent->data;
+	fid_t fid = reinterpret_cast<fid_t>(dentry->parent->data);
 
-	vfd->children->erase(vfd->children->find(dentry->name));
+	m_client->Tremove(fid, [&](xerr_t err) {
+
+	});
+
 
 	return 0;
 }
 
-foperr_t virt_stat(fauth_t* auth, filenode_t* fnode, filestats_t* stats)
+xerr_t XRemoteFileSystem::stat(fauth_t* auth, filenode_t* fnode, filestats_t* stats)
 {
 	virt_filedata_t* vfd = (virt_filedata_t*)fnode->data;
 
-	stats->uid  = "user";
-	stats->gid  = "group";
+	stats->uid = "user";
+	stats->gid = "group";
 	stats->muid = "otheruser";
 
 	stats->atime = fnode->atime;
@@ -393,7 +354,7 @@ foperr_t virt_stat(fauth_t* auth, filenode_t* fnode, filestats_t* stats)
 	return 0;
 }
 
-foperr_t virt_wstat(fauth_t* auth, filenode_t* fnode, filestats_t* stats)
+xerr_t XRemoteFileSystem::wstat(fauth_t* auth, filenode_t* fnode, filestats_t* stats)
 {
 	virt_filedata_t* vfd = (virt_filedata_t*)fnode->data;
 	if (stats->atime != UINT32_MAX)
@@ -407,8 +368,7 @@ foperr_t virt_wstat(fauth_t* auth, filenode_t* fnode, filestats_t* stats)
 	return 0;
 }
 
-
-uint32_t virt_fileversion(filenode_t* fnode)
+uint32_t XRemoteFileSystem::fileversion(filenode_t* fnode)
 {
 	virt_filedata_t* vfd = (virt_filedata_t*)fnode->data;
 	return vfd->ver;

@@ -13,9 +13,9 @@ xstr_t xstrndup(const char* str, xstrlen_t length)
 {
 	xstr_t d = (xstr_t)malloc(sizeof(xstrlen_t) + length);
 
+	if (length != 0)
+		memcpy(d->str(), str, length);
 	d->len = length;
-	memcpy(d->str(), str, length);
-
 	return d;
 }
 xstr_t xstrdup(const xstr_t str)
@@ -28,26 +28,51 @@ xstr_t xstrdup(const char* str)
 }
 
 // String copying
-char* xstrncpy(char* dest, const xstr_t src, xstrlen_t size)
-{
-	xstrlen_t sz = size;
-	if (src->len < sz)
-		sz = src->len;
-
-	memcpy(dest, src->str(), sz);
-	return dest;
-}
 xstr_t xstrcpy(xstr_t dest, const xstr_t src)
 {
 	size_t sz = dest->len;
 	if (src->len < sz)
 		sz = src->len;
 
-	memcpy(dest->str(), src->str(), sz);
+	if (sz != 0)
+		memcpy(dest->str(), src->str(), sz);
 	dest->len = sz;
 	return dest;
 }
+xstr_t xstrncpy(xstr_t dest, const xstr_t src, xstrlen_t size)
+{
+	xstrlen_t sz = size;
+	if (src->len < sz)
+		sz = src->len;
+	
+	if (sz != 0)
+		memcpy(dest->str(), src->str(), sz);
+	dest->len = sz;
+	return dest;
+}
+xstr_t xstrcpy(xstr_t dest, const char* src)
+{
+	return xstrncpy(dest, src, strlen(src));
+}
+char* xstrncpy(char* dest, const xstr_t src, xstrlen_t size)
+{
+	xstrlen_t sz = size;
+	if (src->len < sz)
+		sz = src->len;
 
+	if (sz != 0)
+		memcpy(dest, src->str(), sz);
+	return dest;
+}
+xstr_t xstrncpy(xstr_t dest, const char* src, xstrlen_t size)
+{
+	// Hmm, sketchy? I'd like to check dest's size to not over copy, but dest is likely to be uninitalized
+	if(size != 0)
+		memcpy(dest->str(), src, size);
+	dest->len = size;
+	return dest;
+
+}
 
 // String Comparison
 int xstrcmp(const xstr_t l, const xstr_t r)
@@ -143,18 +168,70 @@ int xstrcmp(const char* l, const xstr_t r)
 }
 
 
-
 /////////////////////////////
 // Supporting string utils // 
 /////////////////////////////
+
+
+xstr_t xstrsplit(const char* str, char delimiter, int* segments)
+{
+	// Count up how many bytes we need
+	int sections = 1;
+	int sz = 0;
+	for (const char* c = str; *c; c++)
+	{
+		if (*c == delimiter)
+			sections++;
+		else
+			sz++;
+	}
+
+	// Make space for our output
+	char* arr = (char*)malloc(sz + sections * sizeof(xstrlen_t));
+
+	// Copy into arr
+	xstr_t s = (xstr_t)arr;
+	const char* start = str, * c = start;
+	for (; *c; c++)
+	{
+		if (*c == delimiter)
+		{
+			xstrlen_t len = c - start;
+			s->len = len;
+			memcpy(s->str(), start, len);
+			s = xstrnext(s);
+			start = c + 1;
+		}
+	}
+	// Copy in the last section
+	xstrlen_t len = c - start;
+	if (len != 0)
+	{
+		s->len = len;
+		memcpy(s->str(), start, len);
+	}
+
+	if (segments) *segments = sections;
+	return (xstr_t)arr;
+}
+
+char* xstrcstr(const xstr_t str)
+{
+	char* cstr = (char*)malloc(str->len + 1);
+	memcpy(cstr, str->str(), str->len);
+	cstr[str->len] = 0;
+	return cstr;
+}
+
 xstr_t xstrnext(const xstr_t str)
 {
 	return reinterpret_cast<xstr_t>(str->str() + str->len);
 }
 
-void xstrsanitize(xstr_t str)
+bool xstrsafe(const xstr_t str, const void* end)
 {
-	// TODO: check string size with message size and etc.
+	const char* cend = reinterpret_cast<const char*>(end);
+	return reinterpret_cast<const char*>(str) + sizeof(xstrlen_t) <= end && str->str() + str->len <= cend;
 }
 
 /////////////
@@ -225,19 +302,7 @@ bool xstrequality_t::operator()(const  char*& l, const xstr_t& r) const { return
 #include <stdio.h>
 void xstrprint(const xstr_t str)
 {
+	if (!str) return;
+
 	fwrite(str->str(), sizeof(char), str->len, stdout);
-	/*
-	if (str->len == 0)
-	{
-		puts("");
-	}
-	else
-	{
-		char* s = (char*)malloc(str->len + 1);
-		memcpy(s, str->str(), str->len);
-		s[str->len] = 0;
-		puts(s);
-		free(s);
-	}
-	*/
 }

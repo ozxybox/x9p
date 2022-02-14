@@ -11,6 +11,13 @@ typedef uint64_t epoch_t;
 // Unix Time - 32 bit
 typedef uint32_t epoch32_t;
 
+// FIDs, client specified IDs to Directory Entries
+typedef uint32_t fid_t;
+
+// Unique message identifying tags
+typedef uint16_t mtag_t;
+
+typedef const char* xerr_t;
 
 typedef uint8_t qidtype_t;
 enum : qidtype_t
@@ -49,4 +56,3 @@ enum : openmode_t
 	X9P_OPEN_TRUNC = 0x10,
 	X9P_OPEN_CLOSE = 0x40,
 };
-
