@@ -63,8 +63,8 @@ void runcl()
 
 	if (err) printf(err);
 
-	xstr_t uname = xstrdup("user");
-	xstr_t aname = xstrdup("/");
+	xstr_t uname = XSTR_L("user");
+	xstr_t aname = XSTR_L("/");
 	cl.Tattach(0, NOFID, uname, aname, [&](xerr_t err, qid_t* qid) {
 		printf("%s\n", err ? err : "ATTACH");
 	});

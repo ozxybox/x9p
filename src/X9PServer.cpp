@@ -347,7 +347,7 @@ void X9PServer::ProcessPackets()
 			break;
 		}
 		default:
-			for (int k = 0; k < recvmsg->size; k++)
+			for (uint32_t k = 0; k < recvmsg->size; k++)
 			{
 				printf("%u|", (unsigned int)((unsigned char*)recvmsg)[k]);
 			}

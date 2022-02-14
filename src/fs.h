@@ -31,40 +31,44 @@ enum : ftype_t
 	X9P_FT_APPEND    = 2,
 };
 
-
-// User auth info for acting out file ops
-struct fauth_t
-{
-	uid_t user;
-	gid_t group;
-	// TODO: Connection info here
-};
-
-
-// File information
-struct filenode_t
-{
-	uint32_t nid;    // File Node ID
-	uid_t uid;       // Owning User
-	uid_t gid;       // Owning Group
-	uid_t muid;      // Last user to modify
-
-	epoch_t atime;   // Access time
-	epoch_t mtime;   // Modification time
-
-	ftype_t type;    // File Type
-
-	void* data;      // File Userdata
-	X9PFileSystem* fs; // File Operations
-};
-
-
+class XVirtualFile;
 struct direntry_t
 {
 	xstr_t name;
-	//direntry_t* parent;
-	filenode_t* parent;
-	filenode_t* node;
+	XVirtualFile* parent;
+	XVirtualFile* node;
+};
+
+
+class XVirtualFile
+{
+public:
+	
+	virtual uint32_t Version() = 0;
+	virtual epoch_t AccessTime() = 0;
+	virtual epoch_t ModifyTime() = 0;
+
+	virtual ftype_t Type() = 0;
+	
+	virtual size_t Length() = 0;
+
+	// Permissions
+	virtual const xstr_t OwnerUser() = 0;
+	virtual const xstr_t OwnerGroup() = 0;
+	virtual const xstr_t LastUserToModify() = 0;
+
+	// IO Functions
+	virtual bool Locked() = 0;
+	virtual void Open(openmode_t mode) = 0;
+	virtual void Close() = 0;
+	virtual uint32_t Read (uint64_t offset, uint32_t count, uint8_t* buf) = 0;
+	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf) = 0;
+
+	// Directory Functions
+	virtual xerr_t AddChild(xstr_t name, XVirtualFile* file, direntry_t** out) = 0;
+	virtual xerr_t RemoveChild(xstr_t name) = 0;
+	virtual xerr_t FindChild(xstr_t name, direntry_t** out) = 0;
+
 };
 
 ///////////////////
@@ -72,38 +76,10 @@ struct direntry_t
 ///////////////////
 
 
-struct filestats_t
-{
-	const char* uid;  // Owning User
-	const char* gid;  // Owning Group
-	const char* muid; // Last user to modify
-
-	epoch_t atime;    // Access time
-	epoch_t mtime;    // Modification time
-
-	dirmode_t mode;
-	uint64_t size;
-
-};
-
-struct fileio_t
-{
-	unsigned char* data;
-	uint64_t offset;
-	uint32_t count;
-	uint32_t result;
-};
-
-struct walkparam_t // Twalk
-{
-	uint16_t nwname;
-	xstr_t wname; // This is an array! One string after the other!
-};
 
 
 
-
-qid_t filenodeqid(filenode_t* node);
+qid_t filenodeqid(XVirtualFile* node);
 uint32_t filenodenewid();
 
 
@@ -128,10 +104,9 @@ public:
 	virtual void Twstat (xhnd hnd, stat_t* stat, Rwstat_fn callback);
 
 	
-	virtual uint32_t fileversion(filenode_t* fnode);
-
 	bool isValidXHND(xhnd hnd, direntry_t*& out);
 
 	std::unordered_map<xhnd, direntry_t*> m_handles;
 	xhnd m_hndserial;
 };
+

@@ -15,8 +15,35 @@ typedef struct
 	char* str() { return reinterpret_cast<char*>(this) + sizeof(xstrlen_t); }
 
 	// This is the size of this structure in bytes INCLUDING "len" and "str"
-	size_t size() { return sizeof(xstrlen_t) + len; }
+	uint32_t size() { return sizeof(xstrlen_t) + len; }
 }* xstr_t;
+
+template<unsigned N>
+inline
+#if defined(__cpp_consteval)
+consteval
+#else
+constexpr
+#endif
+auto _xstr_literal(const char(&str)[N])
+{
+	struct
+	{
+		xstrlen_t len = N - 1;
+		char buf[N - 1];
+
+		xstr_t xstr() { return reinterpret_cast<xstr_t>(this); }
+	} lit;
+
+	for (xstrlen_t i = 0; i < N - 1; i++)
+		lit.buf[i] = str[i];
+
+	return lit;
+}
+
+// Use this macro to get an xstr of a string literal
+#define XSTR_L(str) _xstr_literal(str).xstr()
+
 
 
 /////////////////////////
