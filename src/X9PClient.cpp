@@ -1,5 +1,4 @@
 #include "X9PClient.h"
-#include "X9PMessages.h"
 #include "XLogging.h"
 
 #define DEFAULT_MSIZE 8192

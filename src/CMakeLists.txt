@@ -9,16 +9,14 @@ set(SOURCES
 	socket/TCPSocket.cpp
 	socket/TCPSocket_windows.cpp
 	
-	"X9P.h"
-	"X9PMessages.h"
+	"X9PProtocol.h"
 	"X9PFileSystem.h"
 	"X9PServer.h"
 	"X9PServer.cpp"
 	"X9PClient.h"
 	"X9PClient.cpp"
-	"fs.h"
-	"fs.cpp"
-	"fs_virtual.cpp"
+	"XVirtualFileSystem.h"
+	"XVirtualFileSystem.cpp"
 	"xstring.h"
 	"xstring.cpp"
 )

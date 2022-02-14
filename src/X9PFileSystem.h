@@ -1,7 +1,6 @@
 #pragma once
 
-#include "X9P.h"
-#include "X9PMessages.h"
+#include "X9PProtocol.h"
 #include "xstring.h"
 
 #include <functional>

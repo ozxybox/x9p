@@ -1,26 +1,13 @@
 #pragma once
 
 #include "X9PFileSystem.h"
-#include "X9PMessages.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <unordered_map>
 
-// Virtual filesystem
-// Exists on both ends of a 9P connection
-// Somewhat like vnodes and vnodeops but with 9P messages
-// <3 BSD docs
-//
-//
 // FIDs are directory entries
-// QIDs are filenodes
-//
+// QIDs are virtual files
 
-// User ID
-typedef uint32_t uid_t;
-
-// Group ID
-typedef uint32_t gid_t;
 
 // File Type
 typedef uint32_t ftype_t;
@@ -30,6 +17,7 @@ enum : ftype_t
 	X9P_FT_DIRECTORY = 1,
 	X9P_FT_APPEND    = 2,
 };
+
 
 class XVirtualFile;
 struct direntry_t
@@ -74,18 +62,6 @@ public:
 
 };
 
-///////////////////
-// Virtual Files //
-///////////////////
-
-
-
-
-
-qid_t filenodeqid(XVirtualFile* node);
-uint32_t filenodenewid();
-
-
 class XVirtualFileSystem : public X9PFileSystem
 {
 public:
@@ -113,3 +89,5 @@ public:
 	xhnd m_hndserial;
 };
 
+
+qid_t filenodeqid(XVirtualFile* node);

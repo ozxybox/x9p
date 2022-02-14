@@ -1,4 +1,4 @@
-#include "fs.h"
+#include "XVirtualFileSystem.h"
 #include "X9PFileSystem.h"
 #include <stdio.h>
 #include <string.h>
@@ -9,6 +9,21 @@
 
 #define TEMP_IOUNIT 512
 
+
+qid_t filenodeqid(XVirtualFile* node)
+{
+	qid_t qid;
+	qid.path = (uint64_t)node;
+	qid.version = node->Version();
+	qid.type = 0;
+	ftype_t type = node->Type();
+	if (type == X9P_FT_DIRECTORY)
+		qid.type |= X9P_QT_DIR;
+	if (type == X9P_FT_APPEND)
+		qid.type |= X9P_QT_APPEND;
+
+	return qid;
+}
 
 size_t vfstat(direntry_t* de, stat_t* stats, uint32_t max)
 {
@@ -51,9 +66,6 @@ size_t vfstat(direntry_t* de, stat_t* stats, uint32_t max)
 }
 
 
-
-// Too long to type!
-typedef std::unordered_map<xstr_t, direntry_t, xstrhash_t, xstrequality_t> vflookup_t;
 
 
 class XVFSFile : public XVirtualFile
@@ -274,7 +286,7 @@ public:
 	}
 
 private:
-	vflookup_t m_children;
+	std::unordered_map<xstr_t, direntry_t, xstrhash_t, xstrequality_t> m_children;
 	uint32_t m_version;
 	epoch_t m_accesstime;
 	epoch_t m_modifytime;

@@ -5,7 +5,7 @@
 #include <chrono>
 #include <thread>
 #include "xstring.h"
-#include "fs.h"
+#include "XVirtualFileSystem.h"
 
 void runcl();
 void runsv();

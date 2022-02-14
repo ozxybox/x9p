@@ -1,8 +1,8 @@
 #pragma once
-#include "X9P.h"
+
+#include "X9PProtocol.h"
 #include "X9PFileSystem.h"
 #include "socket/TCPSocket.h"
-#include "fs.h"
 
 #include <unordered_map>
 #include <functional>

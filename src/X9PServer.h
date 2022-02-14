@@ -1,5 +1,5 @@
 #pragma once
-#include "X9P.h"
+#include "X9PProtocol.h"
 #include "X9PFileSystem.h"
 #include "X9PClient.h"
 #include "socket/TCPSocket.h"
