@@ -42,6 +42,8 @@ auto _xstr_literal(const char(&str)[N])
 }
 
 // Use this macro to get an xstr of a string literal
+// These cease to exist after their scope is gone!
+// DO NOT RETURN WITH THEM!
 #define XSTR_L(str) _xstr_literal(str).xstr()
 
 

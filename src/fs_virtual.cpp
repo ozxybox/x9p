@@ -5,8 +5,52 @@
 #include <unordered_map>
 #include <vector>
 #include <time.h>
+#include <assert.h>
 
 #define TEMP_IOUNIT 512
+
+
+size_t vfstat(direntry_t* de, stat_t* stats, uint32_t max)
+{
+
+	XVirtualFile* fnode = de->node;
+
+	xstr_t user = fnode->OwnerUser();
+	xstr_t group = fnode->OwnerGroup();
+	xstr_t modifier = fnode->LastUserToModify();
+
+	size_t sz = sizeof(stat_t) + de->name->size() + user->size() + group->size() + modifier->size();
+
+	if (!stats) return sz;
+	assert(sz <= max);
+
+	stats->size = sz;
+
+	// We should really just zero everything that might go over the network for security reasons
+	memset(&stats->_unused0[0], 0, 6);
+
+	stats->qid = filenodeqid(fnode);
+
+	dirmode_t mode = X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC;
+	if (fnode->Type() == X9P_FT_DIRECTORY)
+		mode |= X9P_DM_DIR;
+
+	stats->mode = mode;
+
+	stats->atime = fnode->AccessTime();
+	stats->mtime = fnode->ModifyTime();
+
+	stats->length = fnode->Type() == X9P_FT_DIRECTORY ? 0 : fnode->Length();
+
+	xstrcpy(stats->name(), de->name);
+	xstrcpy(stats->uid(), user);
+	xstrcpy(stats->gid(), group);
+	xstrcpy(stats->muid(), modifier);
+
+	return sz;
+}
+
+
 
 // Too long to type!
 typedef std::unordered_map<xstr_t, direntry_t, xstrhash_t, xstrequality_t> vflookup_t;
@@ -32,9 +76,9 @@ public:
 	{
 		return X9P_FT_FILE;
 	}
-	virtual const xstr_t OwnerUser()        { return XSTR_L("user"); }
-	virtual const xstr_t OwnerGroup()       { return XSTR_L("group"); }
-	virtual const xstr_t LastUserToModify() { return XSTR_L("otheruser"); }
+	virtual const xstr_t OwnerUser()        { return (xstr_t)"\x4\x0user"; }
+	virtual const xstr_t OwnerGroup()       { return (xstr_t)"\x5\x0group"; }
+	virtual const xstr_t LastUserToModify() { return (xstr_t)"\x9\x0otheruser"; }
 
 	virtual size_t Length()
 	{
@@ -114,6 +158,8 @@ public:
 	virtual xerr_t RemoveChild(xstr_t name) { return "Not a directory!"; }
 	virtual xerr_t FindChild(xstr_t name, direntry_t** out) { if(out) *out = 0; return "Not a directory!"; }
 
+	virtual uint32_t ChildCount() { return 0; }
+	virtual xerr_t GetChild(uint32_t index, direntry_t** out) { if (out) *out = 0; return "Not a directory!"; }
 private:
 
 	std::vector<uint8_t> m_buf;
@@ -144,9 +190,9 @@ public:
 	virtual epoch_t AccessTime() { return m_accesstime; }
 	virtual epoch_t ModifyTime() { return m_modifytime; }
 	virtual ftype_t Type() { return X9P_FT_DIRECTORY; }
-	virtual const xstr_t OwnerUser()        { return XSTR_L("user"); }
-	virtual const xstr_t OwnerGroup()       { return XSTR_L("group"); }
-	virtual const xstr_t LastUserToModify() { return XSTR_L("otheruser"); }
+	virtual const xstr_t OwnerUser()        { return (xstr_t)"\x4\x0user"; }
+	virtual const xstr_t OwnerGroup()       { return (xstr_t)"\x5\x0group"; }
+	virtual const xstr_t LastUserToModify() { return (xstr_t)"\x9\x0otheruser"; }
 
 	// As a directory, we don't do file ops
 	virtual size_t Length() { return 0; }
@@ -207,6 +253,26 @@ public:
 		return 0;
 	}
 
+	virtual uint32_t ChildCount()
+	{
+		return m_children.size();
+	}
+	virtual xerr_t GetChild(uint32_t index, direntry_t** out)
+	{
+		if (index >= m_children.size())
+			return "Invalid index!";
+
+		if (out)
+		{
+			// FIXME: gross
+			auto it = m_children.begin();
+			std::advance(it, index);
+			*out = &it->second;
+		}
+
+		return 0;
+	}
+
 private:
 	vflookup_t m_children;
 	uint32_t m_version;
@@ -230,7 +296,7 @@ XVirtualFileSystem::XVirtualFileSystem()
 	s_rootnode = new XVFSDirectory();
 	s_rootnode->AddChild(XSTR_L(".."), s_rootnode, 0);
 
-	s_rootdirentry.name = XSTR_L("/");
+	s_rootdirentry.name = xstrdup("/");
 	s_rootdirentry.parent = s_rootnode;
 	s_rootdirentry.node = s_rootnode;
 
@@ -308,10 +374,9 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 		callback("Invalid handle!", 0, 0);
 		return;
 	}
-	XVirtualFile* fnode = dehnd->node;
 
-	direntry_t* de = 0;
-	XVirtualFile* wn = fnode;
+	direntry_t* de = dehnd;
+	XVirtualFile* wn = de->node;
 
 	qid_t wqid[16];
 
@@ -358,8 +423,14 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 
 void XVirtualFileSystem::Topen(xhnd hnd, openmode_t mode, Ropen_fn callback)
 {
-	direntry_t* de = m_handles[hnd];
-	qid_t q = filenodeqid(de->node);
+	direntry_t* dehnd = 0;
+	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	{
+		callback("Invalid handle!", 0, 0);
+		return;
+	}
+
+	qid_t q = filenodeqid(dehnd->node);
 	callback(0, &q, 512);
 }
 
@@ -412,86 +483,36 @@ void XVirtualFileSystem::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_
 
 	if (node->Type() == X9P_FT_DIRECTORY)
 	{
-#if 0
-		//size_t tot = vfd->children->size() * sizeof(stat_t);
-		char* buf = (char*)malloc(8096);
-		stat_t* stat = (stat_t*)buf;
-		//for (int i = 0; i < vfd->children->count(); i++)
-		//int caa = 0;
-		for(auto& p : *vfd->children)
+		int childcount = node->ChildCount();
+		
+		uint32_t idx = 0;
+		direntry_t* child = 0; 
+
+		uint64_t o = 0;
+		size_t sz = 0;
+		while (o <= offset)
 		{
-			direntry_t* de = &p.second;
-			XVirtualFile* node = de->node;
-			filestats_t stats;
-			node->fs->Tstat(node->);
+			xerr_t err = node->GetChild(idx, &child);
 			if (err)
-				return err;
-
-			size_t szname = de->name->len;
-			size_t szuid = strlen(stats.uid);
-			size_t szgid = strlen(stats.gid);
-			size_t szmuid = strlen(stats.muid);
-			size_t size = sizeof(stat_t) + szname + 2 + szuid + 2 + szgid + 2 + szmuid + 2;
-
-			/*
-			if (size > m_maxmessagesize)
 			{
-				printf("errrrrrrrr");
+				// Probably out of range?
+				callback(0, 0, 0);
+				return;
 			}
-			*/
-
-			stat->size = size;
-			stat->atime = stats.atime;
-			stat->mtime = stats.mtime;
-			stat->mode = stats.mode | X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC; // X9P_DM_DIR ;
-			stat->length = stats.size;
-			stat->qid = filenodeqid(node);
-
-			xstr_t name = stat->name();
-			name->len = szname;
-			memcpy(name->str(), de->name->str(), szname);
-
-			xstr_t uid = stat->uid();
-			uid->len = szuid;
-			memcpy(uid->str(), stats.uid, szuid);
-
-			xstr_t gid = stat->gid();
-			gid->len = szgid;
-			memcpy(gid->str(), stats.gid, szgid);
-
-			xstr_t muid = stat->muid();
-			muid->len = szmuid;
-			memcpy(muid->str(), stats.muid, szmuid);
-
-			stat = (stat_t*)(muid->str() + muid->len);
+			idx++;
+			
+			sz = vfstat(child, 0, 0);
+			o += sz;
 		}
 
-		size_t total = ((char*)stat) - buf;
+		assert(o - sz == offset);
 
+		stat_t* stats = (stat_t*)malloc(sz);
+		vfstat(child, stats, sz);
 
-		// Reading outside of the file?
-		if (fio->offset >= total)
-		{
-			fio->result = 0;
-			return 0;
-		}
+		callback(0, sz, (uint8_t*)stats);
 
-		size_t sz = fio->offset + fio->count;
-
-		// Cap the size off
-		if (sz > total) sz = total;
-		sz -= fio->offset;
-
-		// File -> FIO 
-		memcpy(fio->data, buf + fio->offset, sz);
-		fio->result = sz;
-		//fio->result = 
-		free(buf);
-
-		return 0;// "NOT IMPLEMENTED";
-#else
-		callback("Reading directories not implemented!", 0, 0);
-#endif
+		free(stats);
 	}
 	else
 	{
@@ -570,43 +591,13 @@ void XVirtualFileSystem::Tstat(xhnd hnd, Rstat_fn callback)
 		return;
 	}
 
-	XVirtualFile* fnode = dehnd->node;
-
-	xstr_t user = fnode->OwnerUser();
-	xstr_t group = fnode->OwnerGroup();
-	xstr_t modifier = fnode->LastUserToModify();
-
-	size_t sz = sizeof(stat_t) + dehnd->name->size() + user->size() + group->size() + modifier->size();
+	uint32_t sz = vfstat(dehnd,0,0);
 	stat_t* stats = (stat_t*)malloc(sz);
+	vfstat(dehnd, stats, sz);
 
-	stats->size = sz;
-
-	// We should really just zero everything that might go over the network for security reasons
-	memset(&stats->_unused0[0], 0, 6);
-	
-	stats->qid = filenodeqid(fnode);
-
-	dirmode_t mode = X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC;
-	if (fnode->Type() == X9P_FT_DIRECTORY)
-		mode |= X9P_DM_DIR;
-
-	stats->mode = mode;
-
-	stats->atime = fnode->AccessTime();
-	stats->mtime = fnode->ModifyTime();
-
-	stats->length = fnode->Type() == X9P_FT_DIRECTORY ? 0 : fnode->Length();
-
-	xstrcpy(stats->name(), dehnd->name);
-	xstrcpy(stats->uid(), user);
-	xstrcpy(stats->gid(), group);
-	xstrcpy(stats->muid(), modifier);
-
-	
 	callback(0, stats);
 
 	free(stats);
-
 
 }
 

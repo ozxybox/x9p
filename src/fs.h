@@ -69,6 +69,9 @@ public:
 	virtual xerr_t RemoveChild(xstr_t name) = 0;
 	virtual xerr_t FindChild(xstr_t name, direntry_t** out) = 0;
 
+	virtual uint32_t ChildCount() = 0;
+	virtual xerr_t GetChild(uint32_t index, direntry_t** out) = 0;
+
 };
 
 ///////////////////

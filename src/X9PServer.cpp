@@ -318,13 +318,21 @@ void X9PServer::ProcessPackets()
 			{
 				if (SendError(cl, err, tag)) return;
 
+				uint64_t sz = sizeof(Rstat_t) + stat->size;
+				if (sz > m_maxmessagesize)
+				{
+					SendError(cl, "Max message size was too small???", tag);
+					printf("_________FIXME! TSTAT\n");
+					return;
+				}
+
 				// Compose a response
 				Rstat_t* send = (Rstat_t*)cl.m_sendbuffer;
 				send->type = X9P_RSTAT;
 				send->tag = recvmsg->tag;
-				send->size = sizeof(Rstat_t);
+				send->size = sz;
 				send->n = 1;
-				send->stat = *stat;
+				memcpy(&send->stat, stat, stat->size);
 				cl.SendMessage(send);
 			});
 			break;
