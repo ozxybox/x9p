@@ -169,6 +169,82 @@ int xstrcmp(const char* l, const xstr_t r)
 
 
 /////////////////////////////
+// String conversion utils //
+/////////////////////////////
+
+xstr_t xstrfromd(int d, int radix)
+{
+	int negative = d < 0;
+	int decimals = 0;
+	if (d == 0)
+		decimals = 1;
+	else
+	{
+		if (negative) d *= -1;
+		for (int f = d; f > 0; f /= radix)
+			decimals++;
+	}
+	xstrlen_t chars = decimals + negative;
+
+	xstr_t s = (xstr_t)malloc(sizeof(xstrlen_t) + chars);
+	s->len = chars;
+
+	if (negative)
+		s->str()[0] = '-';
+
+	const char* radix_pallet = "??????????";
+	if (radix <= 10)
+		radix_pallet = "0123456789";
+	else if (radix == 16)
+		radix_pallet = "0123456789ABCDEF";
+	else
+		radix = 10;
+
+	int f = d;
+
+	char* c = s->str() + chars - 1;
+	for (int i = 0; i < decimals; i++)
+	{
+		int v = f % radix;
+		f /= radix;
+
+		*c = radix_pallet[v];
+		c--;
+	}
+
+	return s;
+}
+
+
+bool xstrtod(xstr_t str, int* out)
+{
+	if (str->len == 0) return false;
+
+	char* s = str->str();
+	int negative = s[0] == '-';
+
+	if (negative && str->len == 1) return false;
+
+	
+	int d = 0;
+	for (int i = negative; i < str->len; i++)
+	{
+		char c = s[i];
+		unsigned char v = c - '0';
+		if (v > 9) return false;
+		d = d * 10 + v;
+
+	}
+
+	if (negative) d *= -1;
+
+	if (out) *out = d;
+
+	return true;
+}
+
+
+/////////////////////////////
 // Supporting string utils // 
 /////////////////////////////
 

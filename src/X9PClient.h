@@ -110,8 +110,6 @@ public:
 
 	xerr_t SendMessage(message_t* msg);
 
-	fid_t NewFID();
-
 	mtag_t NewTag();
 	
 	std::unordered_map<fid_t, xhnd> m_fids;
@@ -124,6 +122,8 @@ public:
 
 	char* m_sendbuffer;
 	char* m_recvbuffer;
+
+	xhnd m_xhndserial;
 };
 
 /*

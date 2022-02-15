@@ -71,6 +71,14 @@ int xstrcmp( const  char* l, const xstr_t r);
 
 
 /////////////////////////////
+// String conversion utils //
+/////////////////////////////
+
+xstr_t xstrfromd(int d, int radix);
+bool xstrtod(xstr_t str, int* out);
+
+
+/////////////////////////////
 // Supporting string utils // 
 /////////////////////////////
 

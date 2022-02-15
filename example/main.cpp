@@ -12,6 +12,7 @@ void runsv();
 
 int main(int argc, const char** args)
 {
+	
 	if (argc < 2)
 	{
 		printf("Missing arguments! main.exe [s, c]\n");
@@ -47,7 +48,7 @@ void runsv()
 	while (1)
 	{
 		//printf(".");
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		//std::this_thread::sleep_for(std::chrono::milliseconds(2));
 
 		sv.AcceptConnections();
 		sv.ProcessPackets();
@@ -89,7 +90,7 @@ void runcl()
 
 	while (1)
 	{
-		std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		//std::this_thread::sleep_for(std::chrono::milliseconds(2));
 
 		cl.ProcessPackets();
 	}

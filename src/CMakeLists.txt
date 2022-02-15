@@ -17,6 +17,7 @@ set(SOURCES
 	"X9PClient.cpp"
 	"XVirtualFileSystem.h"
 	"XVirtualFileSystem.cpp"
+	"XLogging.h"
 	"xstring.h"
 	"xstring.cpp"
 )

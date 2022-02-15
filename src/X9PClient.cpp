@@ -38,11 +38,13 @@ X9PClient::X9PClient()
 	m_sendbuffer = (char*)malloc(32);
 	m_recvbuffer = (char*)malloc(32);
 	m_maxmessagesize = 32;
+	m_xhndserial = 0;
 }
 
 X9PClient::X9PClient(TCPClientSocket sock) : X9PClient()
 {
 	m_socket = sock;
+	m_xhndserial = 0;
 }
 
 X9PClient::~X9PClient()
@@ -240,9 +242,13 @@ xerr_t X9PClient::SendMessage(message_t* msg)
 }
 
 
-// This should be made better!
-fid_t X9PClient::NewFID()
+mtag_t X9PClient::NewTag()
 {
+	return m_currentTag++;
+}
+xhnd X9PClient::NewFileHandle(int connection)
+{
+	/*
 	size_t sz = m_fids.size();
 	if (sz >= UINT32_MAX)
 	{
@@ -252,24 +258,15 @@ fid_t X9PClient::NewFID()
 	}
 
 	fid_t fid = (fid_t)sz + 1;
-	
+
 	// Is this actually in use?
 	while (m_fids.find(fid) != m_fids.end())
 		fid++;
-	
+
 	// Put it in to our used fids list
-	m_fids.emplace(fid, 0);
-
-	return fid;
-}
-
-mtag_t X9PClient::NewTag()
-{
-	return m_currentTag++;
-}
-xhnd X9PClient::NewFileHandle(int connection)
-{
-	return NewFID();
+	m_fids.emplace(fid, m_xhndserial++);
+	*/
+	return m_xhndserial++;
 }
 
 

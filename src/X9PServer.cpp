@@ -22,7 +22,6 @@ void X9PServer::End()
 
 }
 
-
 int SendError(X9PClient& cl, xerr_t err, mtag_t tag)
 {
 	if (!err) return 0;
@@ -39,6 +38,21 @@ int SendError(X9PClient& cl, xerr_t err, mtag_t tag)
 
 	cl.SendMessage(send);
 
+	return 1;
+}
+
+
+
+int GetXHND(X9PClient& cl, fid_t fid, mtag_t tag, xhnd& out)
+{
+	auto p = cl.m_fids.find(fid);
+	if (p == cl.m_fids.end())
+	{
+		SendError(cl, "FID does not exist!", tag);
+		return 0;
+	}
+
+	out = p->second;
 	return 1;
 }
 
@@ -175,8 +189,14 @@ void X9PServer::ProcessPackets()
 		case X9P_TCLUNK:
 		{
 			Tclunk_t* recv = (Tclunk_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
-			cl.m_fids.erase(recv->fid);
+			auto p = cl.m_fids.find(recv->fid);
+			if (p == cl.m_fids.end())
+			{
+				SendError(cl, "Cannot clunk nonexistant fid!", recv->tag);
+				break;
+			}
+			xhnd hnd = p->second;
+			cl.m_fids.erase(p);
 			m_filesystem->Tclunk(hnd, [&](xerr_t err)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -199,11 +219,12 @@ void X9PServer::ProcessPackets()
 				break;
 			}
 
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			xhnd newhnd = m_filesystem->NewFileHandle(0);
 			cl.m_fids.emplace(recv->newfid, newhnd);
 			
-
+			
 			m_filesystem->Twalk(hnd, newhnd, recv->nwname, recv->wname(), [&](xerr_t err, uint16_t nwqid, qid_t* wqid)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -222,7 +243,8 @@ void X9PServer::ProcessPackets()
 		case X9P_TOPEN:
 		{
 			Topen_t* recv = (Topen_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			m_filesystem->Topen(hnd, recv->mode, [&](xerr_t err, qid_t* qid, uint32_t iounit)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -241,7 +263,8 @@ void X9PServer::ProcessPackets()
 		case X9P_TCREATE:
 		{
 			Tcreate_t* recv = (Tcreate_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			m_filesystem->Tcreate(hnd, recv->name(), *recv->perm(), *recv->mode(), [&](xerr_t err, qid_t* qid, uint32_t iounit)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -260,7 +283,9 @@ void X9PServer::ProcessPackets()
 		case X9P_TREAD:
 		{
 			Tread_t* recv = (Tread_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
+
 			m_filesystem->Tread(hnd, recv->offset, recv->count, [&](xerr_t err, uint32_t count, uint8_t* data)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -279,7 +304,8 @@ void X9PServer::ProcessPackets()
 		case X9P_TWRITE:
 		{
 			Twrite_t* recv = (Twrite_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			m_filesystem->Twrite(hnd, recv->offset, recv->count, recv->data(), [&](xerr_t err, uint32_t count)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -297,7 +323,8 @@ void X9PServer::ProcessPackets()
 		case X9P_TREMOVE:
 		{
 			Tremove_t* recv = (Tremove_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			m_filesystem->Tremove(hnd, [&](xerr_t err)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -314,7 +341,8 @@ void X9PServer::ProcessPackets()
 		case X9P_TSTAT:
 		{
 			Tstat_t* recv = (Tstat_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			m_filesystem->Tstat(hnd, [&](xerr_t err, stat_t* stat)
 			{
 				if (SendError(cl, err, tag)) return;
@@ -341,7 +369,8 @@ void X9PServer::ProcessPackets()
 		case X9P_TWSTAT:
 		{
 			Twstat_t* recv = (Twstat_t*)recvmsg;
-			xhnd hnd = cl.m_fids[recv->fid];
+			xhnd hnd = 0;
+			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
 			m_filesystem->Twstat(hnd, &recv->stat, [&](xerr_t err)
 			{
 				if (SendError(cl, err, tag)) return;

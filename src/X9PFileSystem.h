@@ -29,6 +29,7 @@ public:
 
 	// These are used instead of FIDs, as FIDs are per connection
 	virtual xhnd NewFileHandle(int connection) = 0;
+	virtual void ReleaseFileHandle(int connection, xhnd hnd) { /*FIXME*/ };
 
 	// virtual void Tversion(uint32_t messagesize, xstr_t version, Rversion_fn callback) = 0;
 	// Tauth

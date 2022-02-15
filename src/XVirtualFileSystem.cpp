@@ -6,6 +6,7 @@
 #include <vector>
 #include <time.h>
 #include <assert.h>
+#include "XLogging.h"
 
 #define TEMP_IOUNIT 512
 
@@ -67,235 +68,170 @@ size_t vfstat(direntry_t* de, stat_t* stats, uint32_t max)
 
 
 
-
-class XVFSFile : public XVirtualFile
+XVFSFile::XVFSFile()
 {
-public:
-	XVFSFile()
-	{
-		m_version = 0;
-		//m_locked = false;
-		m_mode = 0;
+	m_version = 0;
+	//m_locked = false;
+	m_mode = 0;
 		
-		m_accesstime = time(0);
-		m_modifytime = time(0);
+	m_accesstime = time(0);
+	m_modifytime = time(0);
+}
+
+
+// IO functions
+bool XVFSFile::Locked()
+{
+	return false;
+	//return m_locked;
+}
+void XVFSFile::Open(openmode_t mode)
+{
+	//if (m_locked) return;
+
+	m_mode = mode;
+	//m_locked = true;
+}
+void XVFSFile::Close()
+{
+	m_mode = 0;
+	//m_locked = false;
+}
+
+uint32_t XVFSFile::Read(uint64_t offset, uint32_t count, uint8_t* buf)
+{
+	//if ((m_mode & X9P_OPEN_WRITE) && !(m_mode & X9P_OPEN_READWRITE)) return 0;
+
+	// Clamp the read within the bounds of the file
+	if (offset >= m_buf.size())
+		return 0;
+	uint64_t sz = offset + count;
+	if (sz > m_buf.size())
+		sz = m_buf.size();
+	sz -= offset;
+
+	// Only copy if we have a dest
+	if (buf)
+	{
+		uint8_t* data = m_buf.data();
+		memcpy(buf, data + offset, count);
 	}
 
-	virtual uint32_t Version() { return m_version; }
-	virtual epoch_t AccessTime() { return m_accesstime; }
-	virtual epoch_t ModifyTime() { return m_modifytime; }
-	virtual ftype_t Type()
-	{
-		return X9P_FT_FILE;
-	}
-	virtual const xstr_t OwnerUser()        { return (xstr_t)"\x4\x0user"; }
-	virtual const xstr_t OwnerGroup()       { return (xstr_t)"\x5\x0group"; }
-	virtual const xstr_t LastUserToModify() { return (xstr_t)"\x9\x0otheruser"; }
+	m_accesstime = time(0);
+	return (uint32_t)sz;
+}
 
-	virtual size_t Length()
-	{
-		return m_buf.size();
-	}
+uint32_t XVFSFile::Write(uint64_t offset, uint32_t count, uint8_t* buf)
+{
+	//if (!(m_mode & X9P_OPEN_WRITE) && !(m_mode & X9P_OPEN_READWRITE)) return 0;
 
-	// IO functions
-	virtual bool Locked()
+	// Only copy if we have a src
+	if (buf)
 	{
-		return false;
-		//return m_locked;
-	}
-	virtual void Open(openmode_t mode)
-	{
-		//if (m_locked) return;
+		// Append files only use an offset of the end of the file
+		if (Type() & X9P_FT_APPEND)
+			offset = m_buf.size();
 
-		m_mode = mode;
-		//m_locked = true;
-	}
-	virtual void Close()
-	{
-		m_mode = 0;
-		//m_locked = false;
-	}
-
-	virtual uint32_t Read(uint64_t offset, uint32_t count, uint8_t* buf)
-	{
-		//if ((m_mode & X9P_OPEN_WRITE) && !(m_mode & X9P_OPEN_READWRITE)) return 0;
-
-		// Clamp the read within the bounds of the file
+		// Make sure we have enough room for this write
 		uint64_t sz = offset + count;
 		if (sz > m_buf.size())
-			sz = m_buf.size();
-		sz -= offset;
+			m_buf.resize(sz);
 
-		// Only copy if we have a dest
-		if (buf)
-		{
-			uint8_t* data = m_buf.data();
-			memcpy(buf, data + offset, count);
-		}
+		// Copy it in
+		uint8_t* data = m_buf.data();
+		memcpy(data + offset, buf, count);
 
-		m_accesstime = time(0);
-		return (uint32_t)sz;
+
+		m_version++;
 	}
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf)
-	{
-		//if (!(m_mode & X9P_OPEN_WRITE) && !(m_mode & X9P_OPEN_READWRITE)) return 0;
+	m_modifytime = time(0);
 
-		// Only copy if we have a src
-		if (buf)
-		{
-			// Append files only use an offset of the end of the file
-			if (Type() & X9P_FT_APPEND)
-				offset = m_buf.size();
-
-			// Make sure we have enough room for this write
-			uint64_t sz = offset + count;
-			if (sz > m_buf.size())
-				m_buf.resize(sz);
-
-			// Copy it in
-			uint8_t* data = m_buf.data();
-			memcpy(data + offset, buf, count);
+	return count;
+}
 
 
-			m_version++;
-		}
-		m_modifytime = time(0);
 
-		return count;
-	}
-
-	// As a file, we don't do directory ops
-
-	virtual xerr_t AddChild(xstr_t name, XVirtualFile* file, direntry_t** out) { if (out) *out = 0; return "Not a directory!"; }
-	virtual xerr_t RemoveChild(xstr_t name) { return "Not a directory!"; }
-	virtual xerr_t FindChild(xstr_t name, direntry_t** out) { if(out) *out = 0; return "Not a directory!"; }
-
-	virtual uint32_t ChildCount() { return 0; }
-	virtual xerr_t GetChild(uint32_t index, direntry_t** out) { if (out) *out = 0; return "Not a directory!"; }
-private:
-
-	std::vector<uint8_t> m_buf;
-	uint32_t m_version;
-	epoch_t m_accesstime;
-	epoch_t m_modifytime;
-//	bool m_locked;
-	openmode_t m_mode;
-
-};
-
-class XVFSDirectory : public XVirtualFile
+XVFSDirectory::XVFSDirectory()
 {
-public:
+	m_version = 0;
 
-	XVFSDirectory()
-	{
-		m_version = 0;
-
-		m_accesstime = time(0);
-		m_modifytime = time(0);
+	m_accesstime = time(0);
+	m_modifytime = time(0);
 
 		
-		AddChild(XSTR_L("."), this, 0);
-	}
+	AddChild(XSTR_L("."), this, 0);
+}
 
-	virtual uint32_t Version() { return m_version; }
-	virtual epoch_t AccessTime() { return m_accesstime; }
-	virtual epoch_t ModifyTime() { return m_modifytime; }
-	virtual ftype_t Type() { return X9P_FT_DIRECTORY; }
-	virtual const xstr_t OwnerUser()        { return (xstr_t)"\x4\x0user"; }
-	virtual const xstr_t OwnerGroup()       { return (xstr_t)"\x5\x0group"; }
-	virtual const xstr_t LastUserToModify() { return (xstr_t)"\x9\x0otheruser"; }
+// Directory Functions
+xerr_t XVFSDirectory::AddChild(xstr_t name, XVirtualFile* file, direntry_t** out)
+{
+	auto f = m_children.find(name);
+	if (f != m_children.end()) return "File already exists!";
 
-	// As a directory, we don't do file ops
-	virtual size_t Length() { return 0; }
-	virtual bool Locked() { return false; }
-	virtual void Open(openmode_t mode) { }
-	virtual void Close() { }
-	virtual uint32_t Read(uint64_t offset, uint32_t count, uint8_t* buf) { return 0; }
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf) { return 0; }
+	direntry_t de;
+	de.name = xstrdup(name);
+	de.parent = this;
+	de.node = file;
 
-	// Directory Functions
+	m_children.emplace(de.name, de);
 
-	virtual xerr_t AddChild(xstr_t name, XVirtualFile* file, direntry_t** out)
+	// FIXME: what?
+	if (out)
+		*out = &m_children[de.name];
+
+	m_version++;
+	m_modifytime = time(0);
+	return 0;
+}
+xerr_t XVFSDirectory::RemoveChild(xstr_t name)
+{
+	auto f = m_children.find(name);
+	if (f == m_children.end()) return "File does not exist!";
+
+	free(f->second.name);
+	m_children.erase(f);
+
+	m_version++;
+	m_modifytime = time(0);
+	return 0;
+}
+xerr_t XVFSDirectory::FindChild(xstr_t name, direntry_t** out)
+{
+	auto f = m_children.find(name);
+	if (f == m_children.end())
 	{
-		auto f = m_children.find(name);
-		if (f != m_children.end()) return "File already exists!";
-
-		direntry_t de;
-		de.name = xstrdup(name);
-		de.parent = this;
-		de.node = file;
-
-		m_children.emplace(de.name, de);
-
-		// FIXME: what?
-		if (out)
-			*out = &m_children[de.name];
-
-		m_version++;
-		m_modifytime = time(0);
-		return 0;
+		if(out) 
+			*out = 0;
+		return "File does not exist!";
 	}
-	virtual xerr_t RemoveChild(xstr_t name)
+
+	if(out)
+		*out = &f->second;
+
+	m_accesstime = time(0);
+	return 0;
+}
+
+uint32_t XVFSDirectory::ChildCount()
+{
+	return m_children.size();
+}
+xerr_t XVFSDirectory::GetChild(uint32_t index, direntry_t** out)
+{
+	if (index >= m_children.size())
+		return "Invalid index!";
+
+	if (out)
 	{
-		auto f = m_children.find(name);
-		if (f == m_children.end()) return "File does not exist!";
-
-		free(f->second.name);
-		m_children.erase(f);
-
-		m_version++;
-		m_modifytime = time(0);
-		return 0;
-	}
-	virtual xerr_t FindChild(xstr_t name, direntry_t** out)
-	{
-		auto f = m_children.find(name);
-		if (f == m_children.end())
-		{
-			if(out) 
-				*out = 0;
-			return "File does not exist!";
-		}
-
-		if(out)
-			*out = &f->second;
-
-		m_accesstime = time(0);
-		return 0;
+		// FIXME: gross
+		auto it = m_children.begin();
+		std::advance(it, index);
+		*out = &it->second;
 	}
 
-	virtual uint32_t ChildCount()
-	{
-		return m_children.size();
-	}
-	virtual xerr_t GetChild(uint32_t index, direntry_t** out)
-	{
-		if (index >= m_children.size())
-			return "Invalid index!";
+	return 0;
+}
 
-		if (out)
-		{
-			// FIXME: gross
-			auto it = m_children.begin();
-			std::advance(it, index);
-			*out = &it->second;
-		}
-
-		return 0;
-	}
-
-private:
-	std::unordered_map<xstr_t, direntry_t, xstrhash_t, xstrequality_t> m_children;
-	uint32_t m_version;
-	epoch_t m_accesstime;
-	epoch_t m_modifytime;
-};
-
-static direntry_t s_rootdirentry;
-static XVFSDirectory* s_rootnode;
-
-direntry_t* virt_rootdirentry() { return &s_rootdirentry; }
 
 
 
@@ -305,15 +241,15 @@ XVirtualFileSystem::XVirtualFileSystem()
 
 
 	// Root Directory
-	s_rootnode = new XVFSDirectory();
-	s_rootnode->AddChild(XSTR_L(".."), s_rootnode, 0);
+	m_rootnode = new XVFSDirectory();
+	m_rootnode->AddChild(XSTR_L(".."), m_rootnode, 0);
 
-	s_rootdirentry.name = xstrdup("/");
-	s_rootdirentry.parent = s_rootnode;
-	s_rootdirentry.node = s_rootnode;
+	m_rootdirentry.name = xstrdup("/");
+	m_rootdirentry.parent = m_rootnode;
+	m_rootdirentry.node = m_rootnode;
 
 
-
+#if 0
 	// Text file
 	XVFSFile* txt = new XVFSFile();
 
@@ -322,16 +258,24 @@ XVirtualFileSystem::XVirtualFileSystem()
 	txt->Write(0, sizeof(str), (uint8_t*)&str[0]);
 	txt->Close();
 
-	s_rootnode->AddChild(XSTR_L("hello.txt"), txt, 0);
+	m_rootnode->AddChild(XSTR_L("hello.txt"), txt, 0);
 
 	// Directory
 	XVFSDirectory* folder = new XVFSDirectory();
 	folder->AddChild(XSTR_L("hoopla.txt"), txt, 0);
 
-	folder->AddChild(XSTR_L(".."), s_rootnode, 0);
-	s_rootnode->AddChild(XSTR_L("files"), folder, 0);
+	folder->AddChild(XSTR_L(".."), m_rootnode, 0);
+	m_rootnode->AddChild(XSTR_L("files"), folder, 0);
+#endif
 
 }
+
+direntry_t* XVirtualFileSystem::RootDirectory()
+{
+	return &m_rootdirentry;
+}
+
+
 
 bool XVirtualFileSystem::isValidXHND(xhnd hnd, direntry_t*& out)
 {
@@ -363,9 +307,9 @@ void XVirtualFileSystem::Tattach(xhnd hnd, xhnd ahnd, xstr_t username, xstr_t ac
 		return;
 	}
 
-	m_handles[hnd] = &s_rootdirentry;
+	m_handles[hnd] = &m_rootdirentry;
 
-	qid_t q = filenodeqid(s_rootnode);
+	qid_t q = filenodeqid(m_rootnode);
 	callback(0, &q);
 }
 
@@ -378,16 +322,18 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 		return;
 	}
 
-#if XLOG_VERBOSE
-	putchar('\n');
-#endif
-
 	direntry_t* dehnd = 0;
 	if (!isValidXHND(hnd, dehnd) || !dehnd)
 	{
 		callback("Invalid handle!", 0, 0);
 		return;
 	}
+
+#if XLOG_VERBOSE
+	printf("__Currently at %d ", hnd);
+	xstrprint(dehnd->name);
+	putchar('\n');
+#endif
 
 	direntry_t* de = dehnd;
 	XVirtualFile* wn = de->node;
@@ -398,7 +344,7 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 	uint16_t n = nwname;
 	for (xstr_t name = wname; i < n; name = xstrnext(name))
 	{
-#if XLOG_VERBOSE 
+#if XLOG_VERBOSE
 		xstrprint(name);
 		putchar('\n');
 #endif
@@ -409,6 +355,9 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 			xerr_t ferr = wn->FindChild(name, &f);
 			if (ferr)
 			{
+#if XLOG_VERBOSE
+				printf("Directory does not exist!");
+#endif
 				// Does not exist!
 				break;
 			}
@@ -454,7 +403,7 @@ void XVirtualFileSystem::Topen(xhnd hnd, openmode_t mode, Ropen_fn callback)
 
 void XVirtualFileSystem::Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_t mode, Rcreate_fn callback)
 {
-
+	// TODO: Add filtering for invalid names, such as "." ".." "a/b" "a\\b" "a:b"
 	direntry_t* dehnd = 0;
 	if (!isValidXHND(hnd, dehnd) || !dehnd)
 	{
@@ -477,7 +426,15 @@ void XVirtualFileSystem::Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_
 	}
 
 	direntry_t* rde = 0;
-	dir->AddChild(name, node, &rde);
+	xerr_t err = dir->AddChild(name, node, &rde);
+
+	if (err || !rde)
+	{
+		callback("Cannot create file!", 0, 0);
+		delete node;
+		return;
+	}
+
 	m_handles[hnd] = rde;
 
 	qid_t q = filenodeqid(rde->node);
@@ -496,6 +453,14 @@ void XVirtualFileSystem::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_
 	}
 
 	XVirtualFile* node = dehnd->node;
+
+
+#if XLOG_VERBOSE
+	printf("__# Currently at %d ", hnd);
+	xstrprint(dehnd->name);
+	putchar('\n');
+#endif
+
 
 	if (node->Type() == X9P_FT_DIRECTORY)
 	{
