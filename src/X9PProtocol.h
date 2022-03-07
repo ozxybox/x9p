@@ -1,6 +1,6 @@
 #pragma once
 #include <stdint.h>
-
+#include "XErrors.h"
 
 #define X9P_VERSION "9P2000"
 #define X9P_VERSION_LEN (sizeof(X9P_VERSION) - 1)
@@ -17,7 +17,6 @@ typedef uint32_t fid_t;
 // Unique message identifying tags
 typedef uint16_t mtag_t;
 
-typedef const char* xerr_t;
 
 typedef uint8_t qidtype_t;
 enum : qidtype_t
@@ -30,6 +29,7 @@ enum : qidtype_t
 	X9P_QT_TMP    = 0b00000100, // Temporary/not-backed-up file 
 	X9P_QT_FILE   = 0b00000000, // File
 };
+
 
 // First byte is the same as a QID_TYPE
 typedef uint32_t dirmode_t;
@@ -44,6 +44,9 @@ enum : dirmode_t
 	X9P_DM_READ   = 0x00000004,	// Can Read?
 	X9P_DM_WRITE  = 0x00000002,	// Can Write?
 	X9P_DM_EXEC   = 0x00000001,	// Can Execute?
+
+	X9P_DM_PERM_MASK = X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC,
+	X9P_DM_PROTOCOL_MASK = X9P_DM_PERM_MASK | X9P_DM_DIR | X9P_DM_APPEND | X9P_DM_EXCL | X9P_DM_MOUNT | X9P_DM_AUTH | X9P_DM_TMP
 };
 
 typedef uint8_t openmode_t;
@@ -55,7 +58,27 @@ enum : openmode_t
 	X9P_OPEN_EXEC,
 	X9P_OPEN_TRUNC = 0x10,
 	X9P_OPEN_CLOSE = 0x40,
+
+	X9P_OPEN_STATE_MASK = X9P_OPEN_READ | X9P_OPEN_WRITE | X9P_OPEN_READWRITE | X9P_OPEN_EXEC,
+	X9P_OPEN_PROTOCOL_MASK = X9P_OPEN_STATE_MASK | X9P_OPEN_TRUNC | X9P_OPEN_CLOSE,
+
+	// Bits not used by by 9P
+	X9P_OPEN_EX_INVALID = 4,
 };
+
+
+inline dirmode_t X9POpenModeToDirMode(openmode_t mode)
+{
+	const dirmode_t dm[] = {
+		X9P_DM_READ, // X9P_OPEN_READ
+		X9P_DM_WRITE, // X9P_OPEN_WRITE
+		X9P_DM_READ | X9P_DM_WRITE, // X9P_OPEN_READWRITE
+		X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC, // X9P_OPEN_EXEC
+	};
+
+	return dm[mode & X9P_OPEN_STATE_MASK];
+}
+
 
 
 
@@ -264,7 +287,7 @@ struct Tcreate_t : public message_t
 {
 	fid_t fid;
 	xstr_t name() { return reinterpret_cast<xstr_t>(this + 1); }
-	uint32_t* perm() { return reinterpret_cast<uint32_t*>(name()->str() + name()->len); }
+	dirmode_t* perm() { return reinterpret_cast<dirmode_t*>(name()->str() + name()->len); }
 	openmode_t* mode() { return reinterpret_cast<openmode_t*>(perm() + 1); };
 };
 struct Rcreate_t : public message_t

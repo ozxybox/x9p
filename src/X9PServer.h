@@ -6,8 +6,6 @@
 
 #include <vector>
 
-
-
 class X9PServer
 {
 public:

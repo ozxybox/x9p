@@ -164,10 +164,20 @@ void X9PServer::ProcessPackets()
 		case X9P_TATTACH:
 		{
 			Tattach_t* recv = (Tattach_t*)recvmsg;
-			xhnd hnd = m_filesystem->NewFileHandle(0);
+
+			// Create a new identity for this attach
+			XAuth* auth = new XAuth;
+			auth->client = &cl;
+			auth->id = cl.m_authserial++;
+			auth->uname = xstrdup(recv->uname());
+			cl.m_connections.push_back(auth);
+
+			xhnd hnd = m_filesystem->NewFileHandle(auth);
 			cl.m_fids.emplace(recv->fid, hnd);
 
-			m_filesystem->Tattach(hnd, recv->afid, recv->uname(), recv->aname(), [&](xerr_t err, qid_t* qid)
+
+
+			m_filesystem->Tattach(hnd, recv->afid, auth->uname, recv->aname(), [&](xerr_t err, qid_t* qid)
 			{
 				if (SendError(cl, err, tag)) return;
 
@@ -221,7 +231,7 @@ void X9PServer::ProcessPackets()
 
 			xhnd hnd = 0;
 			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
-			xhnd newhnd = m_filesystem->NewFileHandle(0);
+			xhnd newhnd = m_filesystem->DeriveFileHandle(hnd);
 			cl.m_fids.emplace(recv->newfid, newhnd);
 			
 			
@@ -245,7 +255,11 @@ void X9PServer::ProcessPackets()
 			Topen_t* recv = (Topen_t*)recvmsg;
 			xhnd hnd = 0;
 			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
-			m_filesystem->Topen(hnd, recv->mode, [&](xerr_t err, qid_t* qid, uint32_t iounit)
+
+			// Sanitize
+			openmode_t mode = recv->mode & X9P_OPEN_PROTOCOL_MASK;
+
+			m_filesystem->Topen(hnd, mode, [&](xerr_t err, qid_t* qid, uint32_t iounit)
 			{
 				if (SendError(cl, err, tag)) return;
 
@@ -265,7 +279,12 @@ void X9PServer::ProcessPackets()
 			Tcreate_t* recv = (Tcreate_t*)recvmsg;
 			xhnd hnd = 0;
 			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
-			m_filesystem->Tcreate(hnd, recv->name(), *recv->perm(), *recv->mode(), [&](xerr_t err, qid_t* qid, uint32_t iounit)
+			
+			// Sanitize
+			dirmode_t perm = *recv->perm() & X9P_DM_PROTOCOL_MASK;
+			openmode_t mode = *recv->mode() & X9P_OPEN_PROTOCOL_MASK;
+			
+			m_filesystem->Tcreate(hnd, recv->name(), perm, mode, [&](xerr_t err, qid_t* qid, uint32_t iounit)
 			{
 				if (SendError(cl, err, tag)) return;
 
@@ -371,6 +390,10 @@ void X9PServer::ProcessPackets()
 			Twstat_t* recv = (Twstat_t*)recvmsg;
 			xhnd hnd = 0;
 			if (!GetXHND(cl, recv->fid, recv->tag, hnd)) break;
+
+			// Sanitize
+			recv->stat.mode &= X9P_DM_PROTOCOL_MASK;
+
 			m_filesystem->Twstat(hnd, &recv->stat, [&](xerr_t err)
 			{
 				if (SendError(cl, err, tag)) return;

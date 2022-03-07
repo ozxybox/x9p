@@ -15,11 +15,16 @@ set(SOURCES
 	"X9PServer.cpp"
 	"X9PClient.h"
 	"X9PClient.cpp"
-	"XVirtualFileSystem.h"
-	"XVirtualFileSystem.cpp"
 	"XLogging.h"
+	"XErrors.h"
 	"xstring.h"
 	"xstring.cpp"
+
+	"XVirtualFileSystem.h"
+	"XVirtualFileSystem.cpp"
+
+	"XBaseApiFileSystem.h"
+	"XBaseApiFileSystem.cpp"
 )
 
 

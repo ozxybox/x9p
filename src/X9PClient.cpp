@@ -39,12 +39,12 @@ X9PClient::X9PClient()
 	m_recvbuffer = (char*)malloc(32);
 	m_maxmessagesize = 32;
 	m_xhndserial = 0;
+	m_authserial = 0;
 }
 
 X9PClient::X9PClient(TCPClientSocket sock) : X9PClient()
 {
 	m_socket = sock;
-	m_xhndserial = 0;
 }
 
 X9PClient::~X9PClient()
@@ -246,7 +246,7 @@ mtag_t X9PClient::NewTag()
 {
 	return m_currentTag++;
 }
-xhnd X9PClient::NewFileHandle(int connection)
+xhnd X9PClient::NewFileHandle(XAuth* user)
 {
 	/*
 	size_t sz = m_fids.size();
@@ -269,6 +269,10 @@ xhnd X9PClient::NewFileHandle(int connection)
 	return m_xhndserial++;
 }
 
+xhnd X9PClient::DeriveFileHandle(xhnd hnd)
+{
+	return NewFileHandle(0);
+}
 
 
 #if 0

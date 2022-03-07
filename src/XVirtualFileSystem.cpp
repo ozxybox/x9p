@@ -8,7 +8,7 @@
 #include <assert.h>
 #include "XLogging.h"
 
-#define TEMP_IOUNIT 512
+#define TEMP_IOUNIT 2048
 
 
 qid_t filenodeqid(XVirtualFile* node)
@@ -34,6 +34,13 @@ size_t vfstat(direntry_t* de, stat_t* stats, uint32_t max)
 	xstr_t user = fnode->OwnerUser();
 	xstr_t group = fnode->OwnerGroup();
 	xstr_t modifier = fnode->LastUserToModify();
+	
+
+	// TODO: resolve null users & groups to the parent's owners!
+	assert(user);
+	assert(group);
+	assert(modifier);
+	
 
 	size_t sz = sizeof(stat_t) + de->name->size() + user->size() + group->size() + modifier->size();
 
@@ -71,8 +78,6 @@ size_t vfstat(direntry_t* de, stat_t* stats, uint32_t max)
 XVFSFile::XVFSFile()
 {
 	m_version = 0;
-	//m_locked = false;
-	m_mode = 0;
 		
 	m_accesstime = time(0);
 	m_modifytime = time(0);
@@ -83,24 +88,17 @@ XVFSFile::XVFSFile()
 bool XVFSFile::Locked()
 {
 	return false;
-	//return m_locked;
 }
-void XVFSFile::Open(openmode_t mode)
+xerr_t XVFSFile::Open(XAuth* user, openmode_t mode)
 {
-	//if (m_locked) return;
-
-	m_mode = mode;
-	//m_locked = true;
+	return 0;
 }
 void XVFSFile::Close()
 {
-	m_mode = 0;
-	//m_locked = false;
 }
 
 uint32_t XVFSFile::Read(uint64_t offset, uint32_t count, uint8_t* buf)
 {
-	//if ((m_mode & X9P_OPEN_WRITE) && !(m_mode & X9P_OPEN_READWRITE)) return 0;
 
 	// Clamp the read within the bounds of the file
 	if (offset >= m_buf.size())
@@ -123,7 +121,6 @@ uint32_t XVFSFile::Read(uint64_t offset, uint32_t count, uint8_t* buf)
 
 uint32_t XVFSFile::Write(uint64_t offset, uint32_t count, uint8_t* buf)
 {
-	//if (!(m_mode & X9P_OPEN_WRITE) && !(m_mode & X9P_OPEN_READWRITE)) return 0;
 
 	// Only copy if we have a src
 	if (buf)
@@ -159,7 +156,7 @@ XVFSDirectory::XVFSDirectory()
 	m_modifytime = time(0);
 
 		
-	AddChild(XSTR_L("."), this, 0);
+	//AddChild(XSTR_L("."), this, 0);
 }
 
 // Directory Functions
@@ -186,7 +183,7 @@ xerr_t XVFSDirectory::AddChild(xstr_t name, XVirtualFile* file, direntry_t** out
 xerr_t XVFSDirectory::RemoveChild(xstr_t name)
 {
 	auto f = m_children.find(name);
-	if (f == m_children.end()) return "File does not exist!";
+	if (f == m_children.end()) return XERR_FILE_DNE;
 
 	free(f->second.name);
 	m_children.erase(f);
@@ -202,7 +199,7 @@ xerr_t XVFSDirectory::FindChild(xstr_t name, direntry_t** out)
 	{
 		if(out) 
 			*out = 0;
-		return "File does not exist!";
+		return XERR_FILE_DNE;
 	}
 
 	if(out)
@@ -219,7 +216,7 @@ uint32_t XVFSDirectory::ChildCount()
 xerr_t XVFSDirectory::GetChild(uint32_t index, direntry_t** out)
 {
 	if (index >= m_children.size())
-		return "Invalid index!";
+		return "Out of range!";
 
 	if (out)
 	{
@@ -239,61 +236,38 @@ XVirtualFileSystem::XVirtualFileSystem()
 {
 	m_hndserial = 0;
 
+	m_rootnode = 0;
+	m_rootdirentry = { 0,0,0 };
+}
+
+void XVirtualFileSystem::Init()
+{
 
 	// Root Directory
-	m_rootnode = new XVFSDirectory();
-	m_rootnode->AddChild(XSTR_L(".."), m_rootnode, 0);
+	m_rootnode = CreateRootDirectory();
 
 	m_rootdirentry.name = xstrdup("/");
 	m_rootdirentry.parent = m_rootnode;
 	m_rootdirentry.node = m_rootnode;
-
-
-#if 0
-	// Text file
-	XVFSFile* txt = new XVFSFile();
-
-	const char str[] = "Hello world!\n";
-	txt->Open(X9P_OPEN_WRITE);
-	txt->Write(0, sizeof(str), (uint8_t*)&str[0]);
-	txt->Close();
-
-	m_rootnode->AddChild(XSTR_L("hello.txt"), txt, 0);
-
-	// Directory
-	XVFSDirectory* folder = new XVFSDirectory();
-	folder->AddChild(XSTR_L("hoopla.txt"), txt, 0);
-
-	folder->AddChild(XSTR_L(".."), m_rootnode, 0);
-	m_rootnode->AddChild(XSTR_L("files"), folder, 0);
-#endif
-
 }
+
+
+XVirtualFile* XVirtualFileSystem::CreateRootDirectory()
+{
+	XVFSDirectory* dir = new XVFSDirectory();
+	//dir->AddChild(XSTR_L(".."), dir, 0);
+	return dir;
+}
+
 
 direntry_t* XVirtualFileSystem::RootDirectory()
 {
 	return &m_rootdirentry;
 }
 
-
-
-bool XVirtualFileSystem::isValidXHND(xhnd hnd, direntry_t*& out)
+vfilehandle_t XVirtualFileSystem::NullEntry()
 {
-	auto f = m_handles.find(hnd);
-	if (f == m_handles.end())
-	{
-		out = 0;
-		return false;
-	}
-	out = f->second;
-	return true;
-}
-
-xhnd XVirtualFileSystem::NewFileHandle(int connection)
-{
-	xhnd hnd = m_hndserial++;
-	m_handles.emplace(hnd, (direntry_t*)0);
-	return hnd;
+	return {};
 }
 
 
@@ -301,13 +275,13 @@ xhnd XVirtualFileSystem::NewFileHandle(int connection)
 void XVirtualFileSystem::Tattach(xhnd hnd, xhnd ahnd, xstr_t username, xstr_t accesstree, Rattach_fn callback)
 {
 	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd))
+	if (!GetHNDEntry(hnd, dehnd))
 	{
-		callback("Invalid handle!", 0);
+		callback(XERR_XHND_INVALID, 0);
 		return;
 	}
 
-	m_handles[hnd] = &m_rootdirentry;
+	m_handles[hnd].m_value = { &m_rootdirentry, X9P_OPEN_EX_INVALID };
 
 	qid_t q = filenodeqid(m_rootnode);
 	callback(0, &q);
@@ -323,9 +297,9 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 	}
 
 	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	if (!GetHNDEntry(hnd, dehnd) || !dehnd)
 	{
-		callback("Invalid handle!", 0, 0);
+		callback(XERR_XHND_INVALID, 0, 0);
 		return;
 	}
 
@@ -351,18 +325,33 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 
 		if (wn->Type() == X9P_FT_DIRECTORY)
 		{
-			direntry_t* f = 0;
-			xerr_t ferr = wn->FindChild(name, &f);
-			if (ferr)
+
+			// Accessing 'Dot'? It's the same dir
+			if (name->len == 1 && *name->str() == '.')
 			{
-#if XLOG_VERBOSE
-				printf("Directory does not exist!");
-#endif
-				// Does not exist!
-				break;
+				// No change.
+
 			}
-			de = f;
-			wn = de->node;
+			else
+			{
+				direntry_t* f = 0;
+
+				xerr_t ferr = wn->FindChild(name, &f);
+				if (ferr)
+				{
+#if XLOG_VERBOSE
+					printf("Directory does not exist!");
+#endif
+					// Does not exist!
+					break;
+				}
+
+				// Update our pos
+				de = f;
+				wn = de->node;
+			}
+
+			// Add the qid to the arr
 			wqid[i] = filenodeqid(de->node);
 		}
 		else
@@ -378,24 +367,36 @@ void XVirtualFileSystem::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wn
 	// v9fs REFUSES to call Tcreate if we don't return Rcreate though
 	// So instead, we just return that we walked 0 directories
 	//if (i == 0)
-	//	return "File does not exist!";
+	//	return XERR_FILE_DNE;
 	
 
-	m_handles[newhnd] = de;
+	m_handles[newhnd].m_value = { de, X9P_OPEN_EX_INVALID };
 	callback(0, i, &wqid[0]);
 }
 
 
 void XVirtualFileSystem::Topen(xhnd hnd, openmode_t mode, Ropen_fn callback)
 {
-	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	XAuthEntry* ae = 0;
+	if (!GetHND(hnd, ae) || !ae->m_value.entry)
 	{
-		callback("Invalid handle!", 0, 0);
+		callback(XERR_XHND_INVALID, 0, 0);
 		return;
 	}
 
-	qid_t q = filenodeqid(dehnd->node);
+	vfilehandle_t* vfh = &ae->m_value;
+	XVirtualFile* node = vfh->entry->node;
+	
+	dirmode_t rp = X9POpenModeToDirMode(mode);
+	dirmode_t ap = node->Permissions(ae->m_auth);
+	if ((rp & ap) != rp)
+	{
+		callback(XERR_NO_PERM, 0, 0);
+		return;
+	}
+
+	vfh->open = mode;
+	qid_t q = filenodeqid(node);
 	callback(0, &q, 512);
 }
 
@@ -404,20 +405,21 @@ void XVirtualFileSystem::Topen(xhnd hnd, openmode_t mode, Ropen_fn callback)
 void XVirtualFileSystem::Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_t mode, Rcreate_fn callback)
 {
 	// TODO: Add filtering for invalid names, such as "." ".." "a/b" "a\\b" "a:b"
-	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	XAuthEntry* ae = 0;
+	if (!GetHND(hnd, ae) || !ae->m_value.entry)
 	{
-		callback("Invalid handle!", 0, 0);
+		callback(XERR_XHND_INVALID, 0, 0);
 		return;
 	}
-	XVirtualFile* dir = dehnd->node;
+	
+	XVirtualFile* dir = ae->m_value.entry->node;
 
 	XVirtualFile* node;
 	if (perm & X9P_DM_DIR)
 	{
 		// Directory
 		node = new XVFSDirectory();
-		node->AddChild(XSTR_L(".."), dir, 0);
+		//node->AddChild(XSTR_L(".."), dir, 0);
 	}
 	else
 	{
@@ -435,7 +437,21 @@ void XVirtualFileSystem::Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_
 		return;
 	}
 
-	m_handles[hnd] = rde;
+	// TODO: Set owner group to the parent group
+	// TODO: Set owner user to the XAuth
+	// TODO: Set permissions based on the parent dir
+	// TODO: Check for write permissions on the parent dir
+
+	openmode_t m = X9P_OPEN_EX_INVALID;
+	if (!(perm & X9P_DM_DIR))
+	{
+		// Open the file 
+		dirmode_t rp = X9POpenModeToDirMode(mode);
+		dirmode_t ap = node->Permissions(ae->m_auth);
+		if ((rp & ap) == rp)
+			m = mode;
+	}
+	m_handles[hnd].m_value = { rde, m };
 
 	qid_t q = filenodeqid(rde->node);
 	callback(0, &q, TEMP_IOUNIT);
@@ -443,23 +459,22 @@ void XVirtualFileSystem::Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_
 
 void XVirtualFileSystem::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_fn callback)
 {
-
-
-	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	XAuthEntry* ae = 0;
+	if (!GetHND(hnd, ae) || !ae->m_value.entry)
 	{
-		callback("Invalid handle!", 0, 0);
+		callback(XERR_XHND_INVALID, 0, 0);
 		return;
 	}
 
-	XVirtualFile* node = dehnd->node;
+	// Check the handle's open mode
+	openmode_t curmode = ae->m_value.open;
+	if ((curmode & X9P_OPEN_EX_INVALID) || (curmode & X9P_OPEN_STATE_MASK == X9P_OPEN_WRITE))
+	{
+		callback(XERR_OPEN_MODE, 0, 0);
+		return;
+	}
 
-
-#if XLOG_VERBOSE
-	printf("__# Currently at %d ", hnd);
-	xstrprint(dehnd->name);
-	putchar('\n');
-#endif
+	XVirtualFile* node = ae->m_value.entry->node;
 
 
 	if (node->Type() == X9P_FT_DIRECTORY)
@@ -498,6 +513,7 @@ void XVirtualFileSystem::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_
 	else
 	{
 
+
 		// Read with no buffer to see how much can be read
 		// Allocate with that rather than count
 		// Otherwise, someone could just say "READ 0xFFFFFFFF BYTES!" and we'd allocate way too much
@@ -517,18 +533,27 @@ void XVirtualFileSystem::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_
 
 void XVirtualFileSystem::Twrite(xhnd hnd, uint64_t offset, uint32_t count, uint8_t* data, Rwrite_fn callback)
 {
-
-	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	XAuthEntry* ae = 0;
+	if (!GetHND(hnd, ae) || !ae->m_value.entry)
 	{
-		callback("Invalid handle!", 0);
+		callback(XERR_XHND_INVALID, 0);
 		return;
 	}
 
-	XVirtualFile* node = dehnd->node;
+	// Check the handle's open mode
+	openmode_t curmode = ae->m_value.open;
+	if ((curmode & X9P_OPEN_EX_INVALID) || (curmode & X9P_OPEN_STATE_MASK == X9P_OPEN_READ))
+	{
+		callback(XERR_OPEN_MODE, 0);
+		return;
+	}
+
+	XVirtualFile* node = ae->m_value.entry->node;
+
+
 	if (node->Type() == X9P_FT_DIRECTORY)
 	{
-		callback("Directories may not be written to!", 0);
+		callback(XERR_NOT_FILE, 0);
 	}
 	else
 	{
@@ -538,25 +563,29 @@ void XVirtualFileSystem::Twrite(xhnd hnd, uint64_t offset, uint32_t count, uint8
 }
 
 
-void XVirtualFileSystem::Tclunk(xhnd hnd, Rclunk_fn callback)
-{
-	m_handles.erase(hnd);
-	callback(0);
-}
 
 void XVirtualFileSystem::Tremove(xhnd hnd, Rremove_fn callback)
 {
-	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	XAuthEntry* ae = 0;
+	if (!GetHND(hnd, ae) || !ae->m_value.entry)
 	{
-		callback("Invalid handle!");
+		callback(XERR_XHND_INVALID);
 		return;
 	}
 
-	XVirtualFile* node = dehnd->node;
+	// TODO: Check for write permission!
+	// Check the handle's open mode
+	/*
+	{
+		callback(XERR_NO_PERM);
+		return;
+	}
+	*/
 
-	node->RemoveChild(dehnd->name);
+	direntry_t* de = ae->m_value.entry;
+	de->node->RemoveChild(de->name);
 	
+
 	m_handles.erase(hnd);
 
 	callback(0);
@@ -566,9 +595,9 @@ void XVirtualFileSystem::Tremove(xhnd hnd, Rremove_fn callback)
 void XVirtualFileSystem::Tstat(xhnd hnd, Rstat_fn callback)
 {
 	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	if (!GetHNDEntry(hnd, dehnd) || !dehnd)
 	{
-		callback("Invalid handle!", 0);
+		callback(XERR_XHND_INVALID, 0);
 		return;
 	}
 
@@ -585,11 +614,14 @@ void XVirtualFileSystem::Tstat(xhnd hnd, Rstat_fn callback)
 void XVirtualFileSystem::Twstat(xhnd hnd, stat_t* stat, Rwstat_fn callback)
 {
 	direntry_t* dehnd = 0;
-	if (!isValidXHND(hnd, dehnd) || !dehnd)
+	if (!GetHNDEntry(hnd, dehnd) || !dehnd)
 	{
-		callback("Invalid handle!");
+		callback(XERR_XHND_INVALID);
 		return;
 	}
+
+	// TODO: check parent dir write perms
+	// TODO: check node write perms
 
 	XVirtualFile* fnode = dehnd->node;
 	
@@ -603,4 +635,17 @@ void XVirtualFileSystem::Twstat(xhnd hnd, stat_t* stat, Rwstat_fn callback)
 	//	fnode->size = stats->size;
 
 	callback(0);
+}
+
+
+bool XVirtualFileSystem::GetHNDEntry(xhnd hnd, direntry_t*& out)
+{
+	auto f = m_handles.find(hnd);
+	if (f == m_handles.end())
+	{
+		out = 0;
+		return false;
+	}
+	out = f->second.m_value.entry;
+	return true;
 }

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "X9PProtocol.h"
+#include "XAuth.h"
 #include "xstring.h"
 
 #include <functional>
@@ -21,15 +22,18 @@ typedef std::function<void(xerr_t err                                )> Rremove_
 typedef std::function<void(xerr_t err, stat_t* stat                  )> Rstat_fn;
 typedef std::function<void(xerr_t err                                )> Rwstat_fn;
 
+
 typedef unsigned int xhnd;
+
 
 class X9PFileSystem
 {
 public:
 
 	// These are used instead of FIDs, as FIDs are per connection
-	virtual xhnd NewFileHandle(int connection) = 0;
-	virtual void ReleaseFileHandle(int connection, xhnd hnd) { /*FIXME*/ };
+	virtual xhnd NewFileHandle(XAuth* user) = 0;
+	virtual xhnd DeriveFileHandle(xhnd hnd) = 0;
+	virtual void ReleaseFileHandle(XAuth* user, xhnd hnd) = 0;
 
 	// virtual void Tversion(uint32_t messagesize, xstr_t version, Rversion_fn callback) = 0;
 	// Tauth

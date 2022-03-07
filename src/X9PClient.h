@@ -2,6 +2,7 @@
 
 #include "X9PProtocol.h"
 #include "X9PFileSystem.h"
+#include "XAuth.h"
 #include "socket/TCPSocket.h"
 
 #include <unordered_map>
@@ -68,7 +69,10 @@ public:
 	xerr_t ProcessPackets();
 
 
-	virtual xhnd NewFileHandle(int connection);
+	virtual xhnd NewFileHandle(XAuth* user);
+	virtual xhnd DeriveFileHandle(xhnd hnd);
+	virtual void ReleaseFileHandle(XAuth* user, xhnd hnd) {};
+
 
 	void Tversion(uint32_t messagesize, xstr_t version, Rversion_fn callback);
 	// Tauth
@@ -124,6 +128,9 @@ public:
 	char* m_recvbuffer;
 
 	xhnd m_xhndserial;
+
+	std::vector<XAuth*> m_connections;
+	int m_authserial;
 };
 
 /*
