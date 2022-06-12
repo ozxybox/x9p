@@ -23,6 +23,7 @@ class XVirtualFile;
 struct direntry_t
 {
 	xstr_t name;
+  //direntry_t* parent;
 	XVirtualFile* parent;
 	XVirtualFile* node;
 };
@@ -33,6 +34,7 @@ struct vfilehandle_t
 	openmode_t open = X9P_OPEN_EX_INVALID;
 };
 
+// FIXME: Ref count on add and remove to dir
 class XVirtualFile
 {
 public:
@@ -51,8 +53,8 @@ public:
 	// IO Functions
 	virtual size_t Length() = 0;
 	virtual bool Locked() = 0;
-	virtual uint32_t Read (uint64_t offset, uint32_t count, uint8_t* buf) = 0;
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf) = 0;
+	virtual uint32_t Read (uint64_t offset, uint32_t count, void* buf) = 0;
+	virtual uint32_t Write(uint64_t offset, uint32_t count, void* buf) = 0;
 
 	// Directory Functions
 	virtual xerr_t AddChild(xstr_t name, XVirtualFile* file, direntry_t** out) = 0;
@@ -79,13 +81,14 @@ public:
 	virtual void Topen  (xhnd hnd, openmode_t mode, Ropen_fn callback);
 	virtual void Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_t mode, Rcreate_fn callback);
 	virtual void Tread  (xhnd hnd, uint64_t offset, uint32_t count, Rread_fn callback);
-	virtual void Twrite (xhnd hnd, uint64_t offset, uint32_t count, uint8_t* data, Rwrite_fn callback);
+	virtual void Twrite (xhnd hnd, uint64_t offset, uint32_t count, void* data, Rwrite_fn callback);
 	virtual void Tremove(xhnd hnd, Rremove_fn callback);
 	virtual void Tstat  (xhnd hnd, Rstat_fn callback);
 	virtual void Twstat (xhnd hnd, stat_t* stat, Rwstat_fn callback);
-
+	virtual void Tclunk (xhnd hnd, Rclunk_fn callback);
 	
 	bool GetHNDEntry(xhnd hnd, direntry_t*& out);
+
 
 private:
 
@@ -114,8 +117,8 @@ public:
 	// IO Functions
 	virtual size_t Length() { return 0; }
 	virtual bool Locked()   { return false; }
-	virtual uint32_t Read (uint64_t offset, uint32_t count, uint8_t* buf) { return 0; }
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf) { return 0; }
+	virtual uint32_t Read (uint64_t offset, uint32_t count, void* buf) { return 0; }
+	virtual uint32_t Write(uint64_t offset, uint32_t count, void* buf) { return 0; }
 
 	// Directory Functions
 	virtual xerr_t AddChild(xstr_t name, XVirtualFile* file, direntry_t** out) { if (out) *out = 0; return XERR_NOT_DIR; }
@@ -143,8 +146,8 @@ public:
 	virtual bool Locked();
 	virtual xerr_t Open(XAuth* user, openmode_t mode);
 	virtual void Close();
-	virtual uint32_t Read(uint64_t offset, uint32_t count, uint8_t* buf);
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf);
+	virtual uint32_t Read(uint64_t offset, uint32_t count, void* buf);
+	virtual uint32_t Write(uint64_t offset, uint32_t count, void* buf);
 
 private:
 
@@ -201,7 +204,7 @@ public:
 	virtual size_t Length() { return sizeof(T); }
 	virtual bool Locked() { return false; }
 
-	virtual uint32_t Read(uint64_t offset, uint32_t count, uint8_t* buf)
+	virtual uint32_t Read(uint64_t offset, uint32_t count, void* buf)
 	{
 		if (offset >= sizeof(T))
 			return 0;
@@ -213,7 +216,7 @@ public:
 			memcpy(buf, reinterpret_cast<char*>(m_data) + offset, sz);
 		return sz;
 	}
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf)
+	virtual uint32_t Write(uint64_t offset, uint32_t count, void* buf)
 	{
 		if (offset >= sizeof(T))
 			return 0;
@@ -248,7 +251,7 @@ public:
 	virtual size_t Length() { return sizeof(Ret); }
 	virtual bool Locked() { return false; }
 
-	virtual uint32_t Read(uint64_t offset, uint32_t count, uint8_t* buf)
+	virtual uint32_t Read(uint64_t offset, uint32_t count, void* buf)
 	{
 		if (!m_rf)
 			return 0;
@@ -266,7 +269,7 @@ public:
 		}
 		return sz;
 	}
-	virtual uint32_t Write(uint64_t offset, uint32_t count, uint8_t* buf)
+	virtual uint32_t Write(uint64_t offset, uint32_t count, void* buf)
 	{
 		if (!m_wf)
 			return 0;

@@ -11,11 +11,13 @@ set(SOURCES
 	
 	"X9PProtocol.h"
 	"X9PFileSystem.h"
+	"X9PFileSystem.cpp"
 	"X9PServer.h"
 	"X9PServer.cpp"
 	"X9PClient.h"
 	"X9PClient.cpp"
 	"XLogging.h"
+	XLogging.cpp
 	"XErrors.h"
 	"xstring.h"
 	"xstring.cpp"
@@ -23,8 +25,11 @@ set(SOURCES
 	"XVirtualFileSystem.h"
 	"XVirtualFileSystem.cpp"
 
-	"XBaseApiFileSystem.h"
-	"XBaseApiFileSystem.cpp"
+	"XApiFileSystem.h"
+	"XApiFileSystem.cpp"
+	
+	"XIO.h"
+	"XIO.cpp"
 )
 
 

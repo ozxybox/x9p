@@ -15,13 +15,15 @@ public:
 	void AcceptConnections();
 	void ProcessPackets();
 
+	float s_lastRecvTime;
 private:
 
 	TCPListenSocket m_listener;
-	std::vector<X9PClient> m_clients;
+	std::vector<X9PClient*> m_clients;
 
 	uint32_t m_maxmessagesize;
 	char* m_respbuffer;
 
-	X9PFileSystem* m_filesystem;
+	X9PFileSystem* m_rootfilesystem;
+
 };

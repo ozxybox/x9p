@@ -67,7 +67,10 @@ ISOCKET_RESULT CreateSocket(SOCKET& out, const char* hostname, const char* servi
     // Resolve the address and port
     err = getaddrinfo(hostname, servicename, &hints, &addr);
     if (err)
+    {
+        printf("getaddrinfo: %d\n\t%s\n", err, gai_strerrorA(err));
         return ISOCKET_RESULT::RESOLVE_ADDRESS_FAIL;
+    }
 
     // Create the socket
     SOCKET sock = socket(addr->ai_family, addr->ai_socktype, addr->ai_protocol);

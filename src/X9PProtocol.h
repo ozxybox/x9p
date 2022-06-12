@@ -2,8 +2,42 @@
 #include <stdint.h>
 #include "XErrors.h"
 
+// The Linux Kernel's 9P implementation, v9fs, seems to deviate a bit from the spec
+// Any protocol compat for it should be described with this
+#define X9P_V9FS_COMPAT 1
+
+//
+// NOTICE: An important goal of this library is to be 100% compatible with 9P2000.
+//         There is ONE extension to the protocol though.
+//         This extension DOES NOT change the protocol's format, but DOES change SERVER behavior.
+// 
+//         If a file has the type MOUNT, it can be hooked.
+//         If a client opens a MOUNT file with "EXEC", the file is hooked until the FID is clunked.
+//         Only after the server responds with a valid Ropen, is it allowed to send "Twrite" messages to the client.
+//         These messages will correspond with the hooked FID and use the tag NOTAG.
+//         The client IS NOT allowed respond to the server with a "Rwrite" message.
+//         
+//         The server should still allow the client to Tread the content of a would be hook without the client hooking.
+//         This is to maintain functionality of a 9P client that lacks this extension.
+//
+//         This feature could be accomplished by negotiating hooks between the server and the client, and the server connecting to a client hosted hook server.
+//         However this is more complexity and data the server should not have to handle. 
+//         The extension covers this problem and covers it well enough.
+//
+//
+// NOTICE: 9P2000 currently uses 32 bit Unix time. 
+//         This will overflow in 2038, but I would be surprised if I'm still using this code by then.
+//         If we ever get to 2030 or so, epoch_t is around to replace epoch32_t.
+//
+//
+
+
+
 #define X9P_VERSION "9P2000"
 #define X9P_VERSION_LEN (sizeof(X9P_VERSION) - 1)
+
+#define X9P_MSIZE_DEFAULT 8192
+
 
 // Unix Time
 typedef uint64_t epoch_t;
@@ -31,21 +65,43 @@ enum : qidtype_t
 };
 
 
-// First byte is the same as a QID_TYPE
 typedef uint32_t dirmode_t;
 enum : dirmode_t
 {
+	// High byte is the same as qidtype_t
 	X9P_DM_DIR    = 0x80000000,	// Directory
 	X9P_DM_APPEND = 0x40000000,	// Append only
 	X9P_DM_EXCL   = 0x20000000,	// Exclusive use
 	X9P_DM_MOUNT  = 0x10000000,	// Mounted channel -- Unused?
 	X9P_DM_AUTH   = 0x08000000,	// Authentication file
 	X9P_DM_TMP    = 0x04000000,	// Temporary/not-backed-up file  
-	X9P_DM_READ   = 0x00000004,	// Can Read?
-	X9P_DM_WRITE  = 0x00000002,	// Can Write?
-	X9P_DM_EXEC   = 0x00000001,	// Can Execute?
+	
+	// A user that is the file's owner checks "other", "group", and "other"
+	X9P_DM_OWNER_READ   = 0b100000000,	// Can the owner read?
+	X9P_DM_OWNER_WRITE  = 0b010000000,	// Can the owner write?
+	X9P_DM_OWNER_EXEC   = 0b001000000,	// Can the owner execute?
 
-	X9P_DM_PERM_MASK = X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC,
+	// A user from the file's group checks both "other" and "group"
+	X9P_DM_GROUP_READ   = 0b000100000,	// Can the group read?
+	X9P_DM_GROUP_WRITE  = 0b000010000,	// Can the group write?
+	X9P_DM_GROUP_EXEC   = 0b000001000,	// Can the group execute?
+	
+	// A user unrelated to the file checks only "other"
+	X9P_DM_OTHER_READ   = 0b000000100,	// Can read?
+	X9P_DM_OTHER_WRITE  = 0b000000010,	// Can write?
+	X9P_DM_OTHER_EXEC   = 0b000000001,	// Can execute?
+
+	// Aggregated permissions
+	X9P_DM_READ  = X9P_DM_OWNER_READ  | X9P_DM_GROUP_READ  | X9P_DM_OTHER_READ,
+	X9P_DM_WRITE = X9P_DM_OWNER_WRITE | X9P_DM_GROUP_WRITE | X9P_DM_OTHER_WRITE,
+	X9P_DM_EXEC  = X9P_DM_OWNER_EXEC  | X9P_DM_GROUP_EXEC  | X9P_DM_OTHER_EXEC,
+
+	// Masks
+	X9P_DM_MASK_OWNER = X9P_DM_OWNER_READ | X9P_DM_OWNER_WRITE | X9P_DM_OWNER_EXEC,
+	X9P_DM_MASK_GROUP = X9P_DM_GROUP_READ | X9P_DM_GROUP_WRITE | X9P_DM_GROUP_EXEC,
+	X9P_DM_MASK_OTHER = X9P_DM_OTHER_READ | X9P_DM_OTHER_WRITE | X9P_DM_OTHER_EXEC,
+
+	X9P_DM_PERM_MASK = X9P_DM_MASK_OWNER | X9P_DM_MASK_GROUP | X9P_DM_MASK_OTHER,
 	X9P_DM_PROTOCOL_MASK = X9P_DM_PERM_MASK | X9P_DM_DIR | X9P_DM_APPEND | X9P_DM_EXCL | X9P_DM_MOUNT | X9P_DM_AUTH | X9P_DM_TMP
 };
 
@@ -63,26 +119,34 @@ enum : openmode_t
 	X9P_OPEN_PROTOCOL_MASK = X9P_OPEN_STATE_MASK | X9P_OPEN_TRUNC | X9P_OPEN_CLOSE,
 
 	// Bits not used by by 9P
-	X9P_OPEN_EX_INVALID = 4,
+	X9P_OPEN_EX_INVALID = 128,
 };
 
 
 inline dirmode_t X9POpenModeToDirMode(openmode_t mode)
 {
 	const dirmode_t dm[] = {
-		X9P_DM_READ, // X9P_OPEN_READ
-		X9P_DM_WRITE, // X9P_OPEN_WRITE
-		X9P_DM_READ | X9P_DM_WRITE, // X9P_OPEN_READWRITE
+		X9P_DM_READ,                              // X9P_OPEN_READ
+		              X9P_DM_WRITE,               // X9P_OPEN_WRITE
+		X9P_DM_READ | X9P_DM_WRITE,               // X9P_OPEN_READWRITE
 		X9P_DM_READ | X9P_DM_WRITE | X9P_DM_EXEC, // X9P_OPEN_EXEC
 	};
 
 	return dm[mode & X9P_OPEN_STATE_MASK];
 }
 
+inline qidtype_t X9PDirModeToQIDType(dirmode_t mode)
+{
+	return reinterpret_cast<qidtype_t*>(&mode)[3];
+}
 
 
 
 #include "xstring.h"
+
+
+// FIXME: We should probably just scrap this funny compiler thing and marshall the data ourselves on recv/send
+
 
 // We need these structs packed with no padding
 #ifdef _MSC_VER
@@ -103,34 +167,22 @@ inline dirmode_t X9POpenModeToDirMode(openmode_t mode)
 // Message types
 enum X9P_MESSAGE
 {
-	X9P_TVERSION = 100,
-	X9P_RVERSION = 101,
-	X9P_TAUTH = 102,
-	X9P_RAUTH = 103,
-	X9P_TATTACH = 104,
-	X9P_RATTACH = 105,
-	//X9P_TERROR = 106,
+	X9P_TVERSION = 100, X9P_RVERSION,
+	X9P_TAUTH    = 102, X9P_RAUTH,
+	X9P_TATTACH  = 104, X9P_RATTACH,
+	X9P_TFLUSH   = 108, X9P_RFLUSH,
+	X9P_TWALK    = 110, X9P_RWALK,
+	X9P_TOPEN    = 112, X9P_ROPEN,
+	X9P_TCREATE  = 114, X9P_RCREATE,
+	X9P_TREAD    = 116, X9P_RREAD,
+	X9P_TWRITE   = 118, X9P_RWRITE,
+	X9P_TCLUNK   = 120, X9P_RCLUNK,
+	X9P_TREMOVE  = 122, X9P_RREMOVE,
+	X9P_TSTAT    = 124, X9P_RSTAT,
+	X9P_TWSTAT   = 126, X9P_RWSTAT,
+
+  //X9P_TERROR = 106,
 	X9P_RERROR = 107,
-	X9P_TFLUSH = 108,
-	X9P_RFLUSH = 109,
-	X9P_TWALK = 110,
-	X9P_RWALK = 111,
-	X9P_TOPEN = 112,
-	X9P_ROPEN = 113,
-	X9P_TCREATE = 114,
-	X9P_RCREATE = 115,
-	X9P_TREAD = 116,
-	X9P_RREAD = 117,
-	X9P_TWRITE = 118,
-	X9P_RWRITE = 119,
-	X9P_TCLUNK = 120,
-	X9P_RCLUNK = 121,
-	X9P_TREMOVE = 122,
-	X9P_RREMOVE = 123,
-	X9P_TSTAT = 124,
-	X9P_RSTAT = 125,
-	X9P_TWSTAT = 126,
-	X9P_RWSTAT = 127,
 };
 
 // Message names
@@ -138,34 +190,20 @@ inline const char* X9PMessageTypeName(uint8_t type)
 {
 	static const char* s_messageTypeNames[] =
 	{
-		"Tversion",
-		"Rversion",
-		"Tauth",
-		"Rauth",
-		"Tattach",
-		"Rattach",
-		"Terror",
-		"Rerror",
-		"Tflush",
-		"Rflush",
-		"Twalk",
-		"Rwalk",
-		"Topen",
-		"Ropen",
-		"Tcreate",
-		"Rcreate",
-		"Tread",
-		"Rread",
-		"Twrite",
-		"Rwrite",
-		"Tclunk",
-		"Rclunk",
-		"Tremove",
-		"Rremove",
-		"Tstat",
-		"Rstat",
-		"Twstat",
-		"Rwstat",
+		"Tversion", "Rversion",
+		"Tauth",    "Rauth",
+		"Tattach",  "Rattach",
+		"Terror",   "Rerror",
+		"Tflush",   "Rflush",
+		"Twalk",    "Rwalk",
+		"Topen",    "Ropen",
+		"Tcreate",  "Rcreate",
+		"Tread",    "Rread",
+		"Twrite",   "Rwrite",
+		"Tclunk",   "Rclunk",
+		"Tremove",  "Rremove",
+		"Tstat",    "Rstat",
+		"Twstat",   "Rwstat",
 	};
 
 	return s_messageTypeNames[type - X9P_TVERSION];
@@ -185,7 +223,7 @@ struct stat_t
 
 	//uint16_t type;  // For kernel use
 	//uint32_t dev;   // For kernel use
-	char _unused0[6]; // type & dev
+	char _unused[6];  // type & dev
 
 	qid_t qid;        // File QID
 
@@ -287,7 +325,7 @@ struct Tcreate_t : public message_t
 {
 	fid_t fid;
 	xstr_t name() { return reinterpret_cast<xstr_t>(this + 1); }
-	dirmode_t* perm() { return reinterpret_cast<dirmode_t*>(name()->str() + name()->len); }
+	dirmode_t* perm() { return reinterpret_cast<dirmode_t*>(xstrnext(name())); }
 	openmode_t* mode() { return reinterpret_cast<openmode_t*>(perm() + 1); };
 };
 struct Rcreate_t : public message_t
@@ -372,6 +410,7 @@ typedef message_t Rremove_t;
 ///////////////////
 // Twalk & Rwalk //
 ///////////////////
+#define X9P_TWALK_MAXELEM 16
 struct Twalk_t : public message_t
 {
 	fid_t fid;

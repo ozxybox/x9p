@@ -8,3 +8,6 @@
 #else
 #define XPRINTF(...) (0)
 #endif
+
+struct stat_t;
+void XLogDumpStat(stat_t* stat);

@@ -1,15 +1,27 @@
 #include "X9PClient.h"
 #include "XLogging.h"
+#include <assert.h>
 
-#define DEFAULT_MSIZE 8192
 
+
+xfiddata_t::xfiddata_t()
+	: refcount(0)
+{
+
+}
+
+xfiddata_t::~xfiddata_t()
+{
+	for (Twrite_fn* hook : hooks)
+		delete hook;
+}
 
 void bigbad()
 {
 	printf("oh no! oh no!\n");
 }
 
-void xqueuedmsg_clear(xqueuedmsg_t* qmsg)
+void xsentmsg_clear(xreqmsg_t* qmsg)
 {
 	// We need to call the correct deconstructor
 	if(qmsg->callback.ptr)
@@ -32,14 +44,18 @@ void xqueuedmsg_clear(xqueuedmsg_t* qmsg)
 	}
 }
 
+
+
+
 X9PClient::X9PClient()
 {
 	// Start with a default buf with just enough space for a Tversion
 	m_sendbuffer = (char*)malloc(32);
 	m_recvbuffer = (char*)malloc(32);
 	m_maxmessagesize = 32;
-	m_xhndserial = 0;
 	m_authserial = 0;
+	m_partialrecvoffset = 0;
+	m_partialrecvsize = 0;
 }
 
 X9PClient::X9PClient(TCPClientSocket sock) : X9PClient()
@@ -50,6 +66,7 @@ X9PClient::X9PClient(TCPClientSocket sock) : X9PClient()
 X9PClient::~X9PClient()
 {
 	//free(m_sendbuffer);
+
 }
 
 void X9PClient::End()
@@ -57,9 +74,9 @@ void X9PClient::End()
 	m_socket.Close();
 	free(m_sendbuffer);
 	free(m_recvbuffer);
-	for (auto p : m_messages)
+	for (auto p : m_requestmessages)
 	{
-		xqueuedmsg_clear(&p.second);
+		xsentmsg_clear(&p.second);
 	}
 }
 
@@ -85,7 +102,7 @@ xerr_t X9PClient::Begin(const char* ip, const char* port)
 	xerr_t errv = 0;
 	bool responded = false;
 
-	Tversion(DEFAULT_MSIZE, ver, [&](xerr_t err, uint32_t msize, xstr_t version) {
+	Tversion(X9P_MSIZE_DEFAULT, ver, [&](xerr_t err, uint32_t msize, xstr_t version) {
 	
 		responded = true;
 
@@ -93,7 +110,7 @@ xerr_t X9PClient::Begin(const char* ip, const char* port)
 			errv = "Begin: Server responded with error?";
 
 		// Check reponses
-		if (msize > DEFAULT_MSIZE)
+		if (msize > X9P_MSIZE_DEFAULT)
 		{
 			errv = "Begin: Server cannot negotiate a packet size larger than the client's";
 			return;
@@ -129,18 +146,37 @@ xerr_t X9PClient::Begin(const char* ip, const char* port)
 
 xerr_t X9PClient::ProcessPackets()
 {
-	// What'd the server say?
+	// Send off all outstanding requests before checking for responses
+	FlushRequests();
 
+	// What'd the server say?
 	message_t* recvmsg = (message_t*)m_recvbuffer;
 	do
 	{
 		bool wouldblock = false;
-		xerr_t err = RecvMessage(wouldblock);
+		xerr_t err = RecvResponse(wouldblock);
 		if (wouldblock) return 0;
 		if (err) return err;
 
-		xqueuedmsg_t* qmsg = &m_messages[recvmsg->tag];
+		if (recvmsg->tag == NOTAG && recvmsg->type == X9P_TWRITE)
+		{
 
+			Twrite_t* wm = (Twrite_t*)recvmsg;
+			xfiddata_t* fd = m_fiddata[wm->fid];
+			printf("Got the weird msg! %d\n", wm->fid);
+
+			// Call all attached hooks
+			for (auto& c : fd->hooks)
+			{
+				c->operator()(0, wm->offset, wm->count, wm->data());
+			}
+
+			continue;
+		}
+
+		xreqmsg_t* qmsg = &m_requestmessages[recvmsg->tag];
+
+		
 		if(qmsg->callback.ptr)
 		{
 			switch (qmsg->type)
@@ -162,18 +198,92 @@ xerr_t X9PClient::ProcessPackets()
 			}
 		}
 
-		m_messages.erase(qmsg->tag);
+		m_requestmessages.erase(qmsg->tag);
+
 	} while (1);
 
 
 }
 
-xerr_t X9PClient::RecvMessage(bool& wouldblock)
-{
 
+xerr_t X9PClient::SendMessage(message_t* m)
+{
+	ISOCKET_RESULT r;
+	r = m_socket.Send((char*)m, m->size);
+	XPRINTF("\x1b[36mSent %u %s %u\x1b[39m\n", m->size, X9PMessageTypeName(m->type), m->tag);
+	if (r != ISOCKET_RESULT::OK) return "SendMessage: Failed";
+	return 0;
+}
+
+
+void X9PClient::FlushRequests()
+{
+	std::vector<xqueuedmsg_t> unsent;
+
+	// Ship off whatever's in the queue and then clear it
+	for (int i = 0; i < m_queue.size(); i++)
+	{
+		xqueuedmsg_t* q = m_queue.data() + i;
+		xerr_t err = SendMessage(q->message);
+
+		if (err)
+		{
+			// If we fail to send the message, hold on to it for later
+			printf("Send failure??!\n\t");
+			puts(err);
+			unsent.push_back(*q);
+		}
+		else
+		{
+			// Remember that we sent this message
+			xreqmsg_t s = { q->message->type, q->message->tag, q->callback };
+			m_requestmessages.emplace(q->message->tag, s);
+
+			delete q->message;
+		}
+
+	}
+
+	m_queue = unsent;
+	//m_queue.clear();
+}
+
+xerr_t X9PClient::RecvResponse(bool& wouldblock)
+{
+	// TODO: Up the recv buffer to something like 8x the size of of max msg
+	//       Recv as much as possible, and process each packet until no bytes remain
+	//       Only when a partial packet appears, or when the buffer is empty, read more data
+	//       A malicious client could load up something like a hundred clunks into a buffer, so we should only 
+	//       process a set number of msgs at a time before returning to check on our other clients
+	
 	// What'd we get back from the server?
 	size_t written;
-	ISOCKET_RESULT r = m_socket.Recv((char*)m_recvbuffer, sizeof(message_t), written);
+	ISOCKET_RESULT r = ISOCKET_RESULT::OK;
+	
+	// Check for a partial
+	if (m_partialrecvsize > 0)
+	{
+		// Push it forward
+		memmove(m_recvbuffer, m_recvbuffer + m_partialrecvoffset, m_partialrecvsize);
+		written = m_partialrecvsize;
+	
+		// Do we have enough for at least 1 msg?
+		if (written < sizeof(message_t))
+		{
+			// We don't. Pull some more data
+			size_t more = 0;
+			r = m_socket.Recv((char*)m_recvbuffer + written, m_maxmessagesize - written, more);
+
+			written += more;
+		}
+
+	}
+	else
+	{
+		// Full buf recv
+		r = m_socket.Recv((char*)m_recvbuffer, m_maxmessagesize, written);
+	}
+
 
 	message_t* msg = (message_t*)m_recvbuffer;
 
@@ -187,33 +297,35 @@ xerr_t X9PClient::RecvMessage(bool& wouldblock)
 
 	// Did we receive ok?
 	if (r != ISOCKET_RESULT::OK)
-		return "RecvMessage: Failed to receive from socket";
+		return "RecvResponse: Failed to receive from socket";
 
 	// Are we still connected?
 	if (written == 0)
-		return "RecvMessage: Disconnected from the other end";
+		return "RecvResponse: Disconnected from the other end";
 
 	// Is it at least big enough for us to read?
 	if (written < sizeof(message_t))
-		return "RecvMessage: Packet smaller than a message_t";
+		return "RecvResponse: Packet smaller than a message_t";
 
 	// Is this message trying to lie about its size?
-	if (msg->size > m_maxmessagesize)
-		return "RecvMessage: Incorrect reported message size";
+	if (msg->size > m_maxmessagesize || msg->size < sizeof(message_t))
+		return "RecvResponse: Incorrect reported message size";
 
-	if (msg->size > sizeof(message_t))
+
+	XPRINTF("\x1b[36mReceived %u %s %u\x1b[39m\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
+	
+	if (msg->size < written)
 	{
-		// We need more
-		while (written < msg->size)
-		{
-			XPRINTF("reading more\n");
-			size_t w;
-			r = m_socket.Recv((char*)m_recvbuffer + written, msg->size - written, w);
-			written += w;
-		}
+		// We got part of another message
+		// Store the offset and size
+		m_partialrecvoffset = msg->size;
+		m_partialrecvsize = written - m_partialrecvoffset;
 	}
-
-	XPRINTF("Received %u %s %u\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
+	else
+	{
+		m_partialrecvoffset = 0;
+		m_partialrecvsize = 0;
+	}
 	
 	return 0;
 }
@@ -221,80 +333,104 @@ xerr_t X9PClient::RecvMessage(bool& wouldblock)
 
 
 
-
-
-void X9PClient::QueueMessage(message_t* msg, xmsgcallback_t callback)
+void X9PClient::FlushResponses()
 {
-	xqueuedmsg_t q = { msg->type, msg->tag, callback };
-	m_messages.emplace(msg->tag, q);
-	SendMessage(msg);
+	std::vector<xqueuedmsg_t> unsent;
+
+	// Ship off whatever's in the queue and then clear it
+	for (int i = 0; i < m_queue.size(); i++)
+	{
+		xqueuedmsg_t* q = m_queue.data() + i;
+		xerr_t err = SendMessage(q->message);
+
+		if (err)
+		{
+			// If we fail to send the message, hold on to it for later
+			printf("Send failure??!\n\t");
+			puts(err);
+			unsent.push_back(*q);
+		}
+		else
+		{
+			delete q->message;
+		}
+
+	}
+
+	m_queue = unsent;
+	//m_queue.clear();
+}
+
+void X9PClient::QueueRequest(message_t* msg, xmsgcallback_t callback)
+{
+	assert(msg->size < m_maxmessagesize);
+
+	// TODO: Instead of allocating small blocks, have our queue be just a big buffer we can write to and send
+	message_t* nm = (message_t*)memcpy(malloc(msg->size), msg, msg->size);
+	xqueuedmsg_t q = { nm, callback };
+	m_queue.push_back(q);
 }
 
 
-xerr_t X9PClient::SendMessage(message_t* msg)
+bool checkqueuefortag_deletethis(std::vector<xqueuedmsg_t>& m_queue, mtag_t tag)
 {
-	XPRINTF("Sent %u %s %u\n", msg->size, X9PMessageTypeName(msg->type), msg->tag);
-
-	ISOCKET_RESULT r;
-	r = m_socket.Send((char*)msg, msg->size);
-	if (r != ISOCKET_RESULT::OK) return "SendMessage: Failed";
-	return 0;
+	for (auto& q : m_queue)
+		if (q.message->tag == tag)
+			return true;
+	return false;
 }
-
 
 mtag_t X9PClient::NewTag()
 {
-	return m_currentTag++;
-}
-xhnd X9PClient::NewFileHandle(XAuth* user)
-{
-	/*
-	size_t sz = m_fids.size();
-	if (sz >= UINT32_MAX)
+	// Find a new tag and make sure it's not already in use.
+	m_currentTag = 0;
+	mtag_t tag;
+	do
 	{
-		// This hasn't happened yet, but if it does, I will cry
-		printf("\n\n----! Completely out of FIDs???? HOW??? !----\n\n");
-		return UINT32_MAX;
-	}
+		tag = m_currentTag++;
+	} while (m_requestmessages.find(tag) != m_requestmessages.end() || checkqueuefortag_deletethis(m_queue, tag));
 
-	fid_t fid = (fid_t)sz + 1;
+	return tag;
+}
 
-	// Is this actually in use?
-	while (m_fids.find(fid) != m_fids.end())
+
+fid_t X9PClient::NewFID()
+{
+	// Find a new fid and make sure it's not already in use.
+	fid_t fid = m_fiddata.size();
+	while (m_fiddata.find(fid) != m_fiddata.end())
 		fid++;
 
-	// Put it in to our used fids list
-	m_fids.emplace(fid, m_xhndserial++);
-	*/
-	return m_xhndserial++;
-}
+	m_fiddata.insert({ fid, new xfiddata_t()});
 
-xhnd X9PClient::DeriveFileHandle(xhnd hnd)
-{
-	return NewFileHandle(0);
+	return fid;
 }
 
 
-#if 0
-
-xerr_t X9PClient::Clunk(fid_t fid)
+// Server
+void X9PClient::QueueResponse(message_t* msg)
 {
-	// First check if it exists in our fid table
-	auto f = m_fids.find(fid);
+	// TODO: Instead of allocating small blocks, have our queue be just a big buffer we can write to and send
+	message_t* nm = (message_t*)memcpy(malloc(msg->size), msg, msg->size);
 
-	// Doesn't exist? No error
-	if (f == m_fids.end())
-		return 0;
+	// TODO: split this up better so we aren't wasting memory with callback pointers
+	xqueuedmsg_t q = { nm, 0 };
+	m_queue.push_back(q);
+
+}
+xerr_t X9PClient::RecvRequest(bool& wouldblock)
+{
+	xerr_t err = RecvResponse(wouldblock);
+	if (wouldblock) return 0;
+	//if (err) 
+	return err;
 	
-	// Not mapped yet? No error
-	if (f->second == 0)
-	{
-		m_fids.erase(f);
-		return 0;
-	}
+
+	//message_t* msg = (message_t*)m_recvbuffer;
+	//m_requestmessages.insert(m_recvbuffer)
 
 }
-#endif
+
 
 
 // RPC calls
@@ -318,7 +454,7 @@ void X9PClient::Tversion(uint32_t messagesize, xstr_t version, Rversion_fn callb
 
 	xmsgcallback_t c;
 	c.version = new Rversion_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 // Tauth
 // Tflush
@@ -331,13 +467,17 @@ void X9PClient::Tattach(xhnd hnd, xhnd ahnd, xstr_t username, xstr_t accesstree,
 		return;
 	}
 
+	if (hnd->id == XHID_UNINITIALIZED)
+		hnd->id = NewFID();
+
 	// Compose the request
 	Tattach_t* req = (Tattach_t*)m_sendbuffer;
 	req->size = sz;
 	req->type = X9P_TATTACH;
 	req->tag = NewTag();
-	req->fid = hnd;
-	req->afid = ahnd;
+
+	req->fid = hnd->id;
+	req->afid = ahnd ? ahnd->id : NOFID;
 
 	xstrcpy(req->uname(), username);
 	xstrcpy(req->aname(), accesstree);
@@ -345,11 +485,20 @@ void X9PClient::Tattach(xhnd hnd, xhnd ahnd, xstr_t username, xstr_t accesstree,
 
 	xmsgcallback_t c;
 	c.attach = new Rattach_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
 void X9PClient::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wname, Rwalk_fn callback)
 {
+	// TODO: Ensure we aren't sending any '.'s
+
+
+	if (hnd->id == XHID_UNINITIALIZED)
+	{
+		callback(XERR_FID_DNE, 0, 0);
+		return;
+	}
+
 	if (nwname > 16)
 	{
 		callback("Walk: Number of walk requests too large! Cannot be more than 16!", 0, 0);
@@ -371,13 +520,16 @@ void X9PClient::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wname, Rwal
 		return;
 	}
 
+	if (newhnd->id == XHID_UNINITIALIZED)
+		newhnd->id = NewFID();
+
 	// Compose the request
 	Twalk_t* req = (Twalk_t*)m_sendbuffer;
 	req->size = sz;
 	req->type = X9P_TWALK;
 	req->tag = NewTag();
-	req->fid = hnd;
-	req->newfid = newhnd;
+	req->fid = hnd->id;
+	req->newfid = newhnd->id;
 	req->nwname = nwname;
 
 	wi = 0;
@@ -394,7 +546,7 @@ void X9PClient::Twalk(xhnd hnd, xhnd newhnd, uint16_t nwname, xstr_t wname, Rwal
 
 	xmsgcallback_t c;
 	c.walk = new Rwalk_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
 void X9PClient::Topen(xhnd hnd, openmode_t mode, Ropen_fn callback)
@@ -404,30 +556,34 @@ void X9PClient::Topen(xhnd hnd, openmode_t mode, Ropen_fn callback)
 	req->size = sizeof(Topen_t);
 	req->type = X9P_TOPEN;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 	req->mode = mode;
 
 
 	xmsgcallback_t c;
 	c.open = new Ropen_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
-void X9PClient::Tcreate(xhnd hnd, xstr_t name, uint32_t perm, openmode_t mode, Rcreate_fn callback)
+void X9PClient::Tcreate(xhnd hnd, xstr_t name, dirmode_t perm, openmode_t mode, Rcreate_fn callback)
 {
 	// Compose the request
 	Tcreate_t* req = (Tcreate_t*)m_sendbuffer;
-	req->size = sizeof(Tcreate_t) + name->size() + sizeof(uint32_t) + sizeof(openmode_t);
+	req->size = sizeof(Tcreate_t) + name->size() + sizeof(dirmode_t) + sizeof(openmode_t);
 	req->type = X9P_TCREATE;
 	req->tag = NewTag();
-	req->fid = hnd;
-	xstrcpy(req->name(), name);
+	req->fid = hnd->id;
+
+	// FIXME: totally botches the name if the max size is bad
+	char* end = (char*)(m_sendbuffer + m_maxmessagesize - sizeof(dirmode_t) + sizeof(openmode_t));
+	xstrncpy_nocheck(req->name(), name, end - (char*)req->name() );
+	
 	*req->perm() = perm;
 	*req->mode() = mode;
 
 	xmsgcallback_t c;
 	c.create = new Rcreate_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
 void X9PClient::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_fn callback)
@@ -437,17 +593,17 @@ void X9PClient::Tread(xhnd hnd, uint64_t offset, uint32_t count, Rread_fn callba
 	req->size = sizeof(Tread_t);
 	req->type = X9P_TREAD;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 	req->offset = offset;
 	req->count = count;
 
 
 	xmsgcallback_t c;
 	c.read = new Rread_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
-void X9PClient::Twrite(xhnd hnd, uint64_t offset, uint32_t count, uint8_t* data, Rwrite_fn callback)
+void X9PClient::Twrite(xhnd hnd, uint64_t offset, uint32_t count, void* data, Rwrite_fn callback)
 {
 	uint32_t sz = sizeof(Twrite_t) + count;
 	if (sz > m_maxmessagesize)
@@ -461,7 +617,7 @@ void X9PClient::Twrite(xhnd hnd, uint64_t offset, uint32_t count, uint8_t* data,
 	req->size = sz;
 	req->type = X9P_TWRITE;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 	req->offset = offset;
 	req->count = count;
 	memcpy(req->data(), data, count);
@@ -469,7 +625,7 @@ void X9PClient::Twrite(xhnd hnd, uint64_t offset, uint32_t count, uint8_t* data,
 
 	xmsgcallback_t c;
 	c.write = new Rwrite_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
 void X9PClient::Tclunk(xhnd hnd, Rclunk_fn callback)
@@ -479,11 +635,16 @@ void X9PClient::Tclunk(xhnd hnd, Rclunk_fn callback)
 	req->size = sizeof(Tclunk_t);
 	req->type = X9P_TCLUNK;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 
 	xmsgcallback_t c;
 	c.clunk = new Rclunk_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
+
+	// Clear out the clunked fid
+	auto f = m_fiddata.find(hnd->id);
+	delete f->second;
+	m_fiddata.erase(f);
 }
 
 void X9PClient::Tremove(xhnd hnd, Rremove_fn callback)
@@ -493,11 +654,16 @@ void X9PClient::Tremove(xhnd hnd, Rremove_fn callback)
 	req->size = sizeof(Tremove_t);
 	req->type = X9P_TREMOVE;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 
 	xmsgcallback_t c;
 	c.remove = new Rremove_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
+
+	// Clear out the clunked fid
+	auto f = m_fiddata.find(hnd->id);
+	delete f->second;
+	m_fiddata.erase(f);
 }
 
 void X9PClient::Tstat(xhnd hnd, Rstat_fn callback)
@@ -507,11 +673,11 @@ void X9PClient::Tstat(xhnd hnd, Rstat_fn callback)
 	req->size = sizeof(Tstat_t);
 	req->type = X9P_TREMOVE;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 
 	xmsgcallback_t c;
 	c.stat = new Rstat_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
 void X9PClient::Twstat(xhnd hnd, stat_t* stat, Rwstat_fn callback)
@@ -521,12 +687,12 @@ void X9PClient::Twstat(xhnd hnd, stat_t* stat, Rwstat_fn callback)
 	req->size = sizeof(Twstat_t);
 	req->type = X9P_TREMOVE;
 	req->tag = NewTag();
-	req->fid = hnd;
+	req->fid = hnd->id;
 	memcpy(&req->stat, stat, sizeof(stat_t));
 
 	xmsgcallback_t c;
 	c.wstat = new Rwstat_fn(callback);
-	QueueMessage(req, c);
+	QueueRequest(req, c);
 }
 
 
@@ -549,12 +715,12 @@ char* GetRerror(message_t* msg)
 	return 0;
 }
 
-void X9PClient::Rversion(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rversion(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.version)(err, 0, 0);
+		(*requestmsg->callback.version)(err, 0, 0);
 		free(err);
 		return;
 	}
@@ -564,18 +730,18 @@ void X9PClient::Rversion(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rversion_t) + sizeof(xstrlen_t))
-		(*queued->callback.version)("Rversion: Response too small", 0, 0);
+		(*requestmsg->callback.version)("Rversion: Response too small", 0, 0);
 	else if (!xstrsafe(resp->version(), end))
-		(*queued->callback.version)("Rversion: Received invalid string size", 0, 0);
+		(*requestmsg->callback.version)("Rversion: Received invalid string size", 0, 0);
 	else // It's clean!
-		(*queued->callback.version)(0, resp->msize, resp->version());
+		(*requestmsg->callback.version)(0, resp->msize, resp->version());
 }
-void X9PClient::Rattach(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rattach(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.attach)(err, 0);
+		(*requestmsg->callback.attach)(err, 0);
 		free(err);
 		return;
 	}
@@ -584,18 +750,18 @@ void X9PClient::Rattach(message_t* respmsg, xqueuedmsg_t* queued)
 	
 	// Always perform size checks first
 	if (resp->size < sizeof(Rattach_t))
-		(*queued->callback.attach)("Rattach: Response too small", 0);
+		(*requestmsg->callback.attach)("Rattach: Response too small", 0);
 	else if (resp->qid.type & X9P_QT_AUTH)
-		(*queued->callback.attach)("Rattach: Authentication not supported", 0);
+		(*requestmsg->callback.attach)("Rattach: Authentication not supported", 0);
 	else 
-		(*queued->callback.attach)(0, &resp->qid);
+		(*requestmsg->callback.attach)(0, &resp->qid);
 }
-void X9PClient::Rwalk(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rwalk(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.walk)(err, 0, 0);
+		(*requestmsg->callback.walk)(err, 0, 0);
 		free(err);
 		return;
 	}
@@ -604,16 +770,16 @@ void X9PClient::Rwalk(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rwalk_t))
-		(*queued->callback.walk)("Rwalk: Response too small", 0, 0);
+		(*requestmsg->callback.walk)("Rwalk: Response too small", 0, 0);
 	else
-		(*queued->callback.walk)(0, resp->nwqid, resp->wqid());
+		(*requestmsg->callback.walk)(0, resp->nwqid, resp->wqid());
 }
-void X9PClient::Ropen(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Ropen(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.open)(err, 0, 0);
+		(*requestmsg->callback.open)(err, 0, 0);
 		free(err);
 		return;
 	}
@@ -622,16 +788,16 @@ void X9PClient::Ropen(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Ropen_t))
-		(*queued->callback.open)("Ropen: Response too small", 0, 0);
+		(*requestmsg->callback.open)("Ropen: Response too small", 0, 0);
 	else
-		(*queued->callback.open)(0, &resp->qid, resp->iounit);
+		(*requestmsg->callback.open)(0, &resp->qid, resp->iounit);
 }
-void X9PClient::Rcreate(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rcreate(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.create)(err, 0, 0);
+		(*requestmsg->callback.create)(err, 0, 0);
 		free(err);
 		return;
 	}
@@ -640,36 +806,36 @@ void X9PClient::Rcreate(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rcreate_t))
-		(*queued->callback.create)("Ropen: Response too small", 0, 0);
+		(*requestmsg->callback.create)("Ropen: Response too small", 0, 0);
 	else
-		(*queued->callback.create)(0, &resp->qid, resp->iounit);
+		(*requestmsg->callback.create)(0, &resp->qid, resp->iounit);
 }
-void X9PClient::Rread(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rread(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.read)(err, 0, 0);
+		(*requestmsg->callback.read)(err, 0, 0);
 		free(err);
 		return;
 	}
-
+	
 	Rread_t* resp = (Rread_t*)respmsg;
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rread_t))
-		(*queued->callback.read)("Rread: Response too small", 0, 0);
+		(*requestmsg->callback.read)("Rread: Response too small", 0, 0);
 	if (resp->count + sizeof(Rread_t) > resp->size)
-		(*queued->callback.read)("Rread: Response count too large", 0, 0);
+		(*requestmsg->callback.read)("Rread: Response count too large", 0, 0);
 	else
-		(*queued->callback.read)(0, resp->count, resp->data());
+		(*requestmsg->callback.read)(0, resp->count, resp->data());
 }
-void X9PClient::Rwrite(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rwrite(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.write)(err, 0);
+		(*requestmsg->callback.write)(err, 0);
 		free(err);
 		return;
 	}
@@ -678,16 +844,16 @@ void X9PClient::Rwrite(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rwrite_t))
-		(*queued->callback.write)("Ropen: Response too small", 0);
+		(*requestmsg->callback.write)("Ropen: Response too small", 0);
 	else
-		(*queued->callback.write)(0, resp->count);
+		(*requestmsg->callback.write)(0, resp->count);
 }
-void X9PClient::Rclunk(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rclunk(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.clunk)(err);
+		(*requestmsg->callback.clunk)(err);
 		free(err);
 		return;
 	}
@@ -696,16 +862,16 @@ void X9PClient::Rclunk(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rclunk_t))
-		(*queued->callback.clunk)("Rclunk: Response too small");
+		(*requestmsg->callback.clunk)("Rclunk: Response too small");
 	else
-		(*queued->callback.clunk)(0);
+		(*requestmsg->callback.clunk)(0);
 }
-void X9PClient::Rremove(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rremove(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.remove)(err);
+		(*requestmsg->callback.remove)(err);
 		free(err);
 		return;
 	}
@@ -714,16 +880,16 @@ void X9PClient::Rremove(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rremove_t))
-		(*queued->callback.remove)("Rremove: Response too small");
+		(*requestmsg->callback.remove)("Rremove: Response too small");
 	else
-		(*queued->callback.remove)(0);
+		(*requestmsg->callback.remove)(0);
 }
-void X9PClient::Rstat(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rstat(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.remove)(err);
+		(*requestmsg->callback.remove)(err);
 		free(err);
 		return;
 	}
@@ -732,16 +898,16 @@ void X9PClient::Rstat(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rstat_t))
-		(*queued->callback.stat)("Rstat: Response too small", 0);
+		(*requestmsg->callback.stat)("Rstat: Response too small", 0);
 	else
-		(*queued->callback.stat)(0, &resp->stat);
+		(*requestmsg->callback.stat)(0, &resp->stat);
 }
-void X9PClient::Rwstat(message_t* respmsg, xqueuedmsg_t* queued)
+void X9PClient::Rwstat(message_t* respmsg, xreqmsg_t* requestmsg)
 {
 	// Check if the response was an Rerror
 	if (char* err = GetRerror(respmsg))
 	{
-		(*queued->callback.wstat)(err);
+		(*requestmsg->callback.wstat)(err);
 		free(err);
 		return;
 	}
@@ -750,8 +916,8 @@ void X9PClient::Rwstat(message_t* respmsg, xqueuedmsg_t* queued)
 
 	// Always perform size checks first
 	if (resp->size < sizeof(Rwstat_t))
-		(*queued->callback.wstat)("Rwstat: Response too small");
+		(*requestmsg->callback.wstat)("Rwstat: Response too small");
 	else
-		(*queued->callback.wstat)(0);
+		(*requestmsg->callback.wstat)(0);
 }
 

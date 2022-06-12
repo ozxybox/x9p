@@ -46,7 +46,7 @@ struct xmsg_t
 
 
 
-struct xqueuedmsg_t
+struct xreqmsg_t
 {
 	uint8_t  type;
 	mtag_t   tag;
@@ -54,6 +54,22 @@ struct xqueuedmsg_t
 	xmsgcallback_t callback;
 };
 
+struct xqueuedmsg_t
+{
+	message_t* message;
+	xmsgcallback_t callback;
+};
+
+
+struct xfiddata_t
+{
+	xfiddata_t();
+	~xfiddata_t();
+
+	int refcount;
+	std::vector<Twrite_fn*> hooks;
+
+};
 
 
 class X9PClient : public X9PFileSystem
@@ -69,11 +85,6 @@ public:
 	xerr_t ProcessPackets();
 
 
-	virtual xhnd NewFileHandle(XAuth* user);
-	virtual xhnd DeriveFileHandle(xhnd hnd);
-	virtual void ReleaseFileHandle(XAuth* user, xhnd hnd) {};
-
-
 	void Tversion(uint32_t messagesize, xstr_t version, Rversion_fn callback);
 	// Tauth
 	// Tflush
@@ -82,42 +93,52 @@ public:
 	virtual void Topen   (xhnd hnd, openmode_t mode, Ropen_fn callback);
 	virtual void Tcreate (xhnd hnd, xstr_t name, uint32_t perm, openmode_t mode, Rcreate_fn callback);
 	virtual void Tread   (xhnd hnd, uint64_t offset, uint32_t count, Rread_fn callback);
-	virtual void Twrite  (xhnd hnd, uint64_t offset, uint32_t count, uint8_t* data, Rwrite_fn callback);
+	virtual void Twrite  (xhnd hnd, uint64_t offset, uint32_t count, void* data, Rwrite_fn callback);
 	virtual void Tclunk  (xhnd hnd, Rclunk_fn callback);
 	virtual void Tremove (xhnd hnd, Rremove_fn callback);
 	virtual void Tstat   (xhnd hnd, Rstat_fn callback);
 	virtual void Twstat  (xhnd hnd, stat_t* stat, Rwstat_fn callback);
 
 private:
-	void Rversion(message_t* respmsg, xqueuedmsg_t* queued);
-  //void Rauth   (message_t* respmsg, xqueuedmsg_t* queued);
-  //void Rerror  (message_t* respmsg, xqueuedmsg_t* queued);
-  //void Rflush  (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rattach (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rwalk   (message_t* respmsg, xqueuedmsg_t* queued);
-	void Ropen   (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rcreate (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rread   (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rwrite  (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rclunk  (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rremove (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rstat   (message_t* respmsg, xqueuedmsg_t* queued);
-	void Rwstat  (message_t* respmsg, xqueuedmsg_t* queued);
+	void Rversion(message_t* respmsg, xreqmsg_t* queued);
+  //void Rauth   (message_t* respmsg, xsentmsg_t* queued);
+  //void Rerror  (message_t* respmsg, xsentmsg_t* queued);
+  //void Rflush  (message_t* respmsg, xsentmsg_t* queued);
+	void Rattach (message_t* respmsg, xreqmsg_t* queued);
+	void Rwalk   (message_t* respmsg, xreqmsg_t* queued);
+	void Ropen   (message_t* respmsg, xreqmsg_t* queued);
+	void Rcreate (message_t* respmsg, xreqmsg_t* queued);
+	void Rread   (message_t* respmsg, xreqmsg_t* queued);
+	void Rwrite  (message_t* respmsg, xreqmsg_t* queued);
+	void Rclunk  (message_t* respmsg, xreqmsg_t* queued);
+	void Rremove (message_t* respmsg, xreqmsg_t* queued);
+	void Rstat   (message_t* respmsg, xreqmsg_t* queued);
+	void Rwstat  (message_t* respmsg, xreqmsg_t* queued);
 public:
 
-
-	//void Clunk(fid_t fid);
+	// Client
+	void FlushRequests();
+	void QueueRequest(message_t* msg, xmsgcallback_t callback = {nullptr});
+	xerr_t RecvResponse(bool& wouldblock);
 	
-	void QueueMessage(message_t* msg, xmsgcallback_t callback);
-	
-	xerr_t RecvMessage(bool& wouldblock);
+	// Server
+	void FlushResponses();
+	void QueueResponse(message_t* msg);
+	xerr_t RecvRequest(bool& wouldblock);
 
-	xerr_t SendMessage(message_t* msg);
+	xerr_t SendMessage(message_t* m);
 
 	mtag_t NewTag();
-	
+	fid_t NewFID();
+
+
 	std::unordered_map<fid_t, xhnd> m_fids;
-	std::unordered_map<mtag_t, xqueuedmsg_t> m_messages;
+
+	std::vector<xqueuedmsg_t> m_queue;
+	std::unordered_map<mtag_t, xreqmsg_t> m_requestmessages;
+
+	std::unordered_map<fid_t, xfiddata_t*> m_fiddata;
+
 
 	TCPClientSocket m_socket;
 	uint16_t m_currentTag;
@@ -126,54 +147,15 @@ public:
 
 	char* m_sendbuffer;
 	char* m_recvbuffer;
+	size_t m_partialrecvoffset;
+	size_t m_partialrecvsize;
 
-	xhnd m_xhndserial;
 
 	std::vector<XAuth*> m_connections;
 	int m_authserial;
 };
 
-/*
-
-should be able to fire off like 6 reads at once or something
-
-req = 
-newrequest(callback)
-.walk("files/documents")
-.open("rad.txt", READ)
-.read(buf, 0, 512)
-.remove();
-
-req.send();
-
-Send off all requests at once 
-
-should this be part of the filesystem?
 
 
-
-Main Thread ------ FS Thread ----- 9P Thread
-
-
-xopen -> vop_open -> Topen --,
-file* <-      qid <- Ropen <-'
-
-
-
-.open.read.remove -> vop_open vop_read vop_remove -> Topen Tread Tremove
-
-func stack  -> vop stack  -> 9p Tmsgs --,
-func result <- vop result <- 9p Rmsgs <-'
-
-
-im designing an RPC api for a nonexistant system!
-
-locking
-0: unlocked
-any: locked
-lock using thread id
-compare thread id against locked state
-wait until 0
-
-*/
-
+// Need something where we can queue up N messages into a big buffer that can be set at once
+// if it fills up we need to alloc space and tack it onto another buffer
